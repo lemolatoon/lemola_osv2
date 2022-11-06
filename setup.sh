@@ -6,6 +6,7 @@
 
 sudo apt-get install qemu-kvm -y
 sudo apt-get install ovmf -y
+sudo apt-get install make -y
 
 # setup ovmf files by yourself
 
