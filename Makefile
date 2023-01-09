@@ -24,4 +24,5 @@ run: disk.img
 	qemu-system-x86_64 \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
-		-drive file=disk.img,format=raw
+		-drive file=disk.img,format=raw \
+		-monitor stdio
