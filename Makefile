@@ -22,6 +22,6 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi
 
 run: disk.img
 	qemu-system-x86_64 \
-		-drive if=pflash,file=ovmf/OVMF_CODE.fd \
-		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd \
-		-hda disk.img
+		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
+		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
+		-drive file=disk.img,format=raw
