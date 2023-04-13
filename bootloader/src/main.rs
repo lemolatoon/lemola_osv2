@@ -1,10 +1,8 @@
-#![no_main]
 #![no_std]
-#![feature(abi_efiapi)]
+#![no_main]
 
 use core::{arch::asm, mem::MaybeUninit};
 
-use uefi::Result;
 use uefi::{
     prelude::*,
     proto::console::text::Output,
@@ -29,7 +27,9 @@ fn main(_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let iter = get_memory_map_iter(boot_services, &mut uninit_buf);
 
     pretty_print_memory_map(iter.clone());
-    pretty_print_memory_map(iter.filter(|memory_descriptor| memory_descriptor.ty == MemoryType::CONVENTIONAL));
+    pretty_print_memory_map(
+        iter.filter(|memory_descriptor| memory_descriptor.ty == MemoryType::CONVENTIONAL),
+    );
 
     loop {
         unsafe {
@@ -48,9 +48,7 @@ fn get_memory_map_iter<'buf, const N: usize>(
     iter
 }
 
-fn pretty_print_memory_map<'buf>(
-    iter: impl Iterator<Item = &'buf MemoryDescriptor>,
-) {
+fn pretty_print_memory_map<'buf>(iter: impl Iterator<Item = &'buf MemoryDescriptor>) {
     for memory_descriptor in iter {
         println!(
             "{{ addr: [ {:#010x} - {:#010x} ], type: {:?}, size: {:#06} KiB }}",
