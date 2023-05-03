@@ -2,11 +2,15 @@ PROFILE=debug
 
 .PHONY: FORCE
 
+kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf: FORCE
+	cd kernel && \
+	cargo build 
+
 bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi: FORCE
 	cd bootloader && \
 	cargo build 
 
-disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi
+disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
 #	qemu-img create [-f format] [-o options] filename [size][preallocation]
 #	mkfs.fat [-n VOLUME-NAME] [-s SECTORS-PER-CLUSTER] [-f NUMBER-OF-FATS] [-R NUMBER-OF-RESERVED-SECTORS] [-F FAT-SIZE]
 #	ref.) `man mkfs.fat`
@@ -18,6 +22,7 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi
 	sudo mount -o loop disk.img mnt && \
 	sudo mkdir -p mnt/EFI/BOOT && \
 	sudo cp bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi mnt/EFI/BOOT/BOOTX64.EFI && \
+	sudo cp kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf mnt/kernel.elf && \
 	sudo umount mnt
 
 run: disk.img
