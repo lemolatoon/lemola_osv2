@@ -3,12 +3,16 @@
 
 extern crate alloc;
 
-use alloc::string::ToString;
+use alloc::{string::ToString, vec};
 use core::{arch::asm, mem::MaybeUninit};
+use elf::{endian::AnyEndian, ElfBytes};
 
 use uefi::{
     prelude::*,
-    proto::console::text::Output,
+    proto::{
+        console::text::Output,
+        media::file::{File, FileAttribute, RegularFile},
+    },
     table::boot::{AllocateType, MemoryDescriptor, MemoryType},
 };
 use uefi_services::println;
@@ -68,7 +72,7 @@ fn main(_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     const ENTRY_BUF_SIZE: usize = 10000;
     let mut entry_buf: [u8; ENTRY_BUF_SIZE] =
         unsafe { core::mem::transmute(AlignedU8Array::<ENTRY_BUF_SIZE>::new(0)) };
-    let kernel_file = loop {
+    let kernel_file_info = loop {
         match root_dir.read_entry(&mut entry_buf) {
             Ok(Some(file_info)) if &file_info.file_name().to_string() == "kernel.elf" => {
                 break file_info
@@ -85,10 +89,43 @@ fn main(_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
         }
     };
 
+    let file_handle = match root_dir.open(
+        cstr16!("kernel.elf"),
+        uefi::proto::media::file::FileMode::Read,
+        FileAttribute::empty(),
+    ) {
+        Ok(file_handle) => file_handle,
+        Err(err) => {
+            println!("Failed to open kernel.elf, {:?}", err);
+            return err.status();
+        }
+    };
+    // Safety: `kernel.elf` is not a directory.
+    let mut kernel_file = unsafe { RegularFile::new(file_handle) };
+    let mut buf = vec![0; kernel_file_info.file_size().try_into().unwrap()];
+    if let Err(err) = kernel_file.read(&mut buf) {
+        println!("Failed to read kernel.elf, {:?}", err);
+        return err.status();
+    }
+
+    let elf = match ElfBytes::<AnyEndian>::minimal_parse(&buf) {
+        Ok(elf) => {
+            // for program_header in elf.ehdr {
+            //     println!("program_header: {:?}", program_header);
+            // }
+            println!("elf.ehdr: {:?}", elf.ehdr);
+            elf
+        }
+        Err(err) => {
+            println!("Failed to parse elf, {:?}", err);
+            return Status::ABORTED;
+        }
+    };
+
     const KERNEL_ENTRY_POINT: usize = 0x101120;
     let allocated_pointer = match boot_services.allocate_pool(
         MemoryType::LOADER_DATA,
-        kernel_file.file_size().try_into().unwrap(),
+        kernel_file_info.file_size().try_into().unwrap(),
     ) {
         Ok(allocated_pages) => allocated_pages,
         Err(err) => {
