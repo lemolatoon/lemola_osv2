@@ -5,11 +5,15 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use alloc::{string::String, vec};
+use common::types::{GraphicsFrameBuffer, KernelMainArg};
 use core::arch::asm;
 use core::mem::MaybeUninit;
+use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
 use log;
+use uefi::proto::console::gop::GraphicsOutput;
+use uefi::table::boot::ScopedProtocol;
 use uefi_services::{print, println};
 
 use uefi::{
@@ -186,12 +190,17 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let entry_point = elf.ehdr.e_entry;
     log::info!("entry_point: {:#x}", entry_point);
     pretty_print_entry_point_asm(entry_point);
+    let graphics_frame_buffer = construct_graphics_info(&boot_services);
+    log::info!("graphics_frame_buffer: {:?}", graphics_frame_buffer);
 
-    let kernel_main: extern "C" fn() -> ! = unsafe { core::mem::transmute(entry_point as usize) };
+    panic!("here1");
+    let kernel_main: extern "C" fn(arg: KernelMainArg) -> ! =
+        unsafe { core::mem::transmute(entry_point as usize) };
+    panic!("here2");
 
     drop(file_protocol);
     // exit_boot_services before boot
-    let mut buf_size = boot_services.memory_map_size().map_size;
+    let buf_size = boot_services.memory_map_size().map_size;
     let mut uninit_buf = Vec::with_capacity(buf_size);
     unsafe { uninit_buf.set_len(buf_size) };
     let (system_table, memory_map) =
@@ -202,10 +211,29 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             }
         };
 
-    kernel_main();
+    let kernel_main_arg = KernelMainArg {
+        graphics_frame_buffer,
+    };
+
+    kernel_main(kernel_main_arg);
 
     #[allow(unreachable_code)]
     Status::SUCCESS
+}
+
+fn construct_graphics_info(boot_services: &BootServices) -> GraphicsFrameBuffer {
+    let mut gop: ScopedProtocol<GraphicsOutput> = match boot_services
+        .get_handle_for_protocol::<GraphicsOutput>()
+        .and_then(|gop_handle| boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle))
+    {
+        Ok(gop) => gop,
+        Err(err) => {
+            panic!("Failed to locate_protocol, {:?}", err);
+        }
+    };
+    panic!("gop2");
+    let mut frame_buffer = gop.frame_buffer();
+    GraphicsFrameBuffer::new(frame_buffer.as_mut_ptr(), frame_buffer.size())
 }
 
 fn pretty_print_entry_point_asm(entry_pointer: u64) {

@@ -10,6 +10,8 @@ bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi: FORCE
 	cd bootloader && \
 	cargo build 
 
+build: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
+
 disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
 #	qemu-img create [-f format] [-o options] filename [size][preallocation]
 #	mkfs.fat [-n VOLUME-NAME] [-s SECTORS-PER-CLUSTER] [-f NUMBER-OF-FATS] [-R NUMBER-OF-RESERVED-SECTORS] [-F FAT-SIZE]
