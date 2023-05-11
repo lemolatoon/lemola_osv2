@@ -194,6 +194,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let mut buf_size = boot_services.memory_map_size().map_size;
     let mut uninit_buf = Vec::with_capacity(buf_size);
     unsafe { uninit_buf.set_len(buf_size) };
+
     let (system_table, memory_map) =
         match system_table.exit_boot_services(image_handle, &mut uninit_buf) {
             Ok(ret) => ret,

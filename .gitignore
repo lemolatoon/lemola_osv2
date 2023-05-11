@@ -1,2 +1,6 @@
 /disk.img
 /kernel/target
+
+# Added by cargo
+
+/target
