@@ -3,11 +3,14 @@
 
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{string::String, vec};
+use core::arch::asm;
 use core::mem::MaybeUninit;
 use elf::{endian::AnyEndian, ElfBytes};
+use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
 use log;
+use uefi_services::{print, println};
 
 use uefi::{
     self,
@@ -61,15 +64,13 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     {
         Ok(protocol) => protocol,
         Err(err) => {
-            log::error!("Failed to get_image_file_system, {:?}", err);
-            return err.status();
+            panic!("Failed to get_image_file_system, {:?}", err);
         }
     };
     let mut root_dir = match file_protocol.open_volume() {
         Ok(root_dir) => root_dir,
         Err(err) => {
-            log::error!("Failed to open root_dir, {:?}", err);
-            return err.status();
+            panic!("Failed to open root_dir, {:?}", err);
         }
     };
 
@@ -87,8 +88,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
                 return Status::ABORTED;
             }
             Err(err) => {
-                log::error!("Failed to read_entry, {:?}", err);
-                return err.status();
+                panic!("Failed to read_entry, {:?}", err);
             }
         }
     };
@@ -100,8 +100,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     ) {
         Ok(file_handle) => file_handle,
         Err(err) => {
-            log::error!("Failed to open kernel.elf, {:?}", err);
-            return err.status();
+            panic!("Failed to open kernel.elf, {:?}", err);
         }
     };
     // Safety: `kernel.elf` is not a directory.
@@ -109,8 +108,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let kernel_file_size = kernel_file_info.file_size().try_into().unwrap();
     let mut kernel_buffer = vec![0; kernel_file_size];
     if let Err(err) = kernel_file.read(&mut kernel_buffer) {
-        log::error!("Failed to read kernel.elf, {:?}", err);
-        return err.status();
+        panic!("Failed to read kernel.elf, {:?}", err);
     }
 
     let elf = match ElfBytes::<AnyEndian>::minimal_parse(&kernel_buffer) {
@@ -128,8 +126,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             elf
         }
         Err(err) => {
-            log::error!("Failed to parse elf, {:?}", err);
-            return Status::ABORTED;
+            panic!("Failed to parse elf, {:?}", err);
         }
     };
 
@@ -147,8 +144,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     ) {
         Ok(allocated_pages) => allocated_pages,
         Err(err) => {
-            log::error!("Failed to allocate_pages, {:?}", err);
-            return err.status();
+            panic!("Failed to allocate_pages, {:?}", err);
         }
     };
     log::info!(
@@ -188,16 +184,21 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     );
     unsafe { copy_load_segments(&elf, &kernel_buffer) };
     let entry_point = elf.ehdr.e_entry;
+    log::info!("entry_point: {:#x}", entry_point);
+    pretty_print_entry_point_asm(entry_point);
+
     let kernel_main: extern "C" fn() -> ! = unsafe { core::mem::transmute(entry_point as usize) };
 
     drop(file_protocol);
     // exit_boot_services before boot
+    let mut buf_size = boot_services.memory_map_size().map_size;
+    let mut uninit_buf = Vec::with_capacity(buf_size);
+    unsafe { uninit_buf.set_len(buf_size) };
     let (system_table, memory_map) =
         match system_table.exit_boot_services(image_handle, &mut uninit_buf) {
             Ok(ret) => ret,
             Err(err) => {
-                log::error!("Failed to exit_boot_services, {:?}", err);
-                return err.status();
+                panic!("Failed to exit_boot_services, {:?}", err);
             }
         };
 
@@ -205,6 +206,60 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     #[allow(unreachable_code)]
     Status::SUCCESS
+}
+
+fn pretty_print_entry_point_asm(entry_pointer: u64) {
+    let mut buf = [0; 16];
+    unsafe {
+        core::ptr::copy_nonoverlapping(entry_pointer as *const u8, buf.as_mut_ptr(), 16);
+    }
+    let mut decoder = Decoder::with_ip(64, &buf, entry_pointer, DecoderOptions::NONE);
+
+    // Formatters: Masm*, Nasm*, Gas* (AT&T) and Intel* (XED).
+    // For fastest code, see `SpecializedFormatter` which is ~3.3x faster. Use it if formatting
+    // speed is more important than being able to re-assemble formatted instructions.
+    let mut formatter = IntelFormatter::new();
+
+    // Change some options, there are many more
+    formatter.options_mut().set_digit_separator("`");
+    formatter.options_mut().set_first_operand_char_index(10);
+
+    // String implements FormatterOutput
+    let mut output = String::new();
+
+    // Initialize this outside the loop because decode_out() writes to every field
+    let mut instruction = Instruction::default();
+
+    // The decoder also implements Iterator/IntoIterator so you could use a for loop:
+    //      for instruction in &mut decoder { /* ... */ }
+    // or collect():
+    //      let instructions: Vec<_> = decoder.into_iter().collect();
+    // but can_decode()/decode_out() is a little faster:
+    const HEXBYTES_COLUMN_BYTE_LENGTH: usize = 10;
+    while decoder.can_decode() {
+        // There's also a decode() method that returns an instruction but that also
+        // means it copies an instruction (40 bytes):
+        //     instruction = decoder.decode();
+        decoder.decode_out(&mut instruction);
+
+        // Format the instruction ("disassemble" it)
+        output.clear();
+        formatter.format(&instruction, &mut output);
+
+        // Eg. "00007FFAC46ACDB2 488DAC2400FFFFFF     lea       rbp,[rsp-100h]"
+        println!("{:016X} ", instruction.ip());
+        let start_index = (instruction.ip() - entry_pointer) as usize;
+        let instr_bytes = &buf[start_index..start_index + instruction.len()];
+        for b in instr_bytes.iter() {
+            print!("{:02X}", b);
+        }
+        if instr_bytes.len() < HEXBYTES_COLUMN_BYTE_LENGTH {
+            for _ in 0..HEXBYTES_COLUMN_BYTE_LENGTH - instr_bytes.len() {
+                print!("  ");
+            }
+        }
+        println!(" {}", output);
+    }
 }
 
 /// Safety;
@@ -262,4 +317,12 @@ fn reset_text_output(boot_services: &BootServices) {
         .open_protocol_exclusive::<Output>(handle)
         .unwrap();
     simple_text_output_protocol.reset(true).unwrap();
+}
+
+#[panic_handler]
+fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+    println!("[PANIC]: {}", info);
+    loop {
+        unsafe { asm!("hlt") };
+    }
 }
