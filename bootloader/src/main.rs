@@ -5,11 +5,12 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::{arch::asm, mem::MaybeUninit};
+use core::mem::MaybeUninit;
 use elf::{endian::AnyEndian, ElfBytes};
-use log::info;
+use log;
 
 use uefi::{
+    self,
     prelude::*,
     proto::{
         console::text::Output,
@@ -34,7 +35,7 @@ impl<const N: usize> AlignedU8Array<N> {
 }
 
 #[entry]
-fn main(_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
+fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     uefi_services::init(&mut system_table).unwrap();
     let boot_services = system_table.boot_services();
 
@@ -188,6 +189,18 @@ fn main(_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     unsafe { copy_load_segments(&elf, &kernel_buffer) };
     let entry_point = elf.ehdr.e_entry;
     let kernel_main: extern "C" fn() -> ! = unsafe { core::mem::transmute(entry_point as usize) };
+
+    drop(file_protocol);
+    // exit_boot_services before boot
+    let (system_table, memory_map) =
+        match system_table.exit_boot_services(image_handle, &mut uninit_buf) {
+            Ok(ret) => ret,
+            Err(err) => {
+                log::error!("Failed to exit_boot_services, {:?}", err);
+                return err.status();
+            }
+        };
+
     kernel_main();
 
     #[allow(unreachable_code)]
