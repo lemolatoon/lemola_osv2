@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 elf = { version = "0.7.2", features = ["nightly"], default-features = false}
-uefi = { version = "0.17.0", features = ["exts"] }
+log = "0.4.17"
+uefi = { version = "0.17.0", features = ["exts", "logger"] }
 uefi-services = "0.14.0"
