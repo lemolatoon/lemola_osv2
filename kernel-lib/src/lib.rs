@@ -1,5 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use core::fmt;
+
 use common::types::PixcelFormat;
 use gen_font::gen_font;
 
@@ -82,15 +84,22 @@ impl CursorPosition {
 
 #[derive(Debug, Clone)]
 pub struct Writer<'a, const N_ROW: usize, const N_COLUMN: usize> {
-    writer: &'a dyn AsciiWriter,
+    writer: &'a (dyn AsciiWriter + Send + Sync),
     position: CursorPosition,
     background_color: Color,
     foreground_color: Color,
     buffer: [[char; N_COLUMN]; N_ROW],
 }
 
+impl<const N_ROW: usize, const N_COLUMN: usize> fmt::Write for Writer<'_, N_ROW, N_COLUMN> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.put_string(s);
+        Ok(())
+    }
+}
+
 impl<'a, const N_ROW: usize, const N_COLUMN: usize> Writer<'a, N_ROW, N_COLUMN> {
-    pub fn new(writer: &'a dyn AsciiWriter) -> Self {
+    pub fn new(writer: &'a (dyn AsciiWriter + Send + Sync)) -> Self {
         Self {
             writer,
             position: CursorPosition { x: 0, y: 0 },
@@ -158,7 +167,7 @@ impl<'a, const N_ROW: usize, const N_COLUMN: usize> Writer<'a, N_ROW, N_COLUMN> 
     }
 }
 
-impl core::fmt::Debug for &dyn AsciiWriter {
+impl core::fmt::Debug for &(dyn AsciiWriter + Send + Sync) {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         format_args!("AsciiWriter: {:?}", self as *const _).fmt(f)
     }
