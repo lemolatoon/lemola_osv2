@@ -51,11 +51,9 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     log::info!("Hello from uefi.rs");
 
-    const BUF_SIZE: usize = 2048;
-    let buf = MaybeUninit::<[u8; BUF_SIZE]>::uninit();
-
-    // Safety: function(memory_map) will initialize this buffer.
-    let mut uninit_buf = unsafe { buf.assume_init() };
+    let buf_size = boot_services.memory_map_size().map_size + 1024;
+    let mut uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
+    unsafe { uninit_buf.set_len(buf_size) };
     let memory_maps: Vec<_> = get_memory_map_iter(boot_services, &mut uninit_buf).collect();
 
     pretty_print_memory_map(memory_maps.iter());
@@ -194,12 +192,9 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let graphics_frame_buffer = construct_graphics_info(&boot_services);
     log::info!("graphics_frame_buffer: {:?}", graphics_frame_buffer);
 
-    let kernel_main: extern "C" fn(arg: KernelMainArg) -> ! =
-        unsafe { core::mem::transmute(entry_point as usize) };
-
     drop(file_protocol);
     // exit_boot_services before boot
-    let buf_size = boot_services.memory_map_size().map_size;
+    let buf_size = boot_services.memory_map_size().map_size + 1024;
     let mut uninit_buf = Vec::with_capacity(buf_size);
     unsafe { uninit_buf.set_len(buf_size) };
     let (system_table, memory_map) =
@@ -214,7 +209,15 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
         graphics_frame_buffer,
     };
 
-    kernel_main(kernel_main_arg);
+    let kernel_main: extern "C" fn(arg: *const KernelMainArg) -> ! =
+        unsafe { core::mem::transmute(entry_point as usize) };
+
+    unsafe {
+        asm!("mov rdi, {0}",
+                  "call {1}",
+     in(reg) &kernel_main_arg as *const _,
+     in(reg) kernel_main as usize,)
+    }
 
     #[allow(unreachable_code)]
     Status::SUCCESS
@@ -322,11 +325,18 @@ fn calc_load_address_range(elf: &ElfBytes<AnyEndian>) -> (u64, u64) {
     (min, max)
 }
 
-fn get_memory_map_iter<'buf, const N: usize>(
+fn get_memory_map_iter<'buf>(
     boot_services: &BootServices,
-    buf: &'buf mut [u8; N],
+    buf: &'buf mut [u8],
 ) -> impl ExactSizeIterator<Item = &'buf MemoryDescriptor> + Clone {
-    let Ok((_, iter)) = boot_services.memory_map(buf) else { panic!("Buffer size {} was not enough", N); };
+    let len = buf.len();
+    log::info!("memory_map buffer address: {:p}", buf.as_ptr());
+    let (_, iter) = match boot_services.memory_map(unsafe { core::mem::transmute(buf) }) {
+        Ok(ret) => ret,
+        Err(err) => {
+            panic!("Failed to get_memory_map, {:?}, buffer_size: {}", err, len);
+        }
+    };
     iter
 }
 

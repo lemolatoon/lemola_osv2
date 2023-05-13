@@ -1,14 +1,17 @@
+.PHONY: FORCE
 PROFILE=debug
 
-.PHONY: FORCE
+ifeq ($(PROFILE),release)
+	CARGO_FLAGS=--release
+endif
 
 kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf: FORCE
 	cd kernel && \
-	cargo build 
+	cargo build $(CARGO_FLAGS)
 
 bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi: FORCE
 	cd bootloader && \
-	cargo build 
+	cargo build $(CARGO_FLAGS)
 
 build: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
 
