@@ -13,7 +13,8 @@ use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
 use log;
 use uefi::proto::console::gop::GraphicsOutput;
-use uefi::table::boot::ScopedProtocol;
+use uefi::table::boot::{ScopedProtocol, SearchType};
+use uefi::Identify;
 use uefi_services::{print, println};
 
 use uefi::{
@@ -189,14 +190,12 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     unsafe { copy_load_segments(&elf, &kernel_buffer) };
     let entry_point = elf.ehdr.e_entry;
     log::info!("entry_point: {:#x}", entry_point);
-    pretty_print_entry_point_asm(entry_point);
+    // pretty_print_entry_point_asm(entry_point);
     let graphics_frame_buffer = construct_graphics_info(&boot_services);
     log::info!("graphics_frame_buffer: {:?}", graphics_frame_buffer);
 
-    panic!("here1");
     let kernel_main: extern "C" fn(arg: KernelMainArg) -> ! =
         unsafe { core::mem::transmute(entry_point as usize) };
-    panic!("here2");
 
     drop(file_protocol);
     // exit_boot_services before boot
@@ -222,21 +221,28 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 }
 
 fn construct_graphics_info(boot_services: &BootServices) -> GraphicsFrameBuffer {
-    let mut gop: ScopedProtocol<GraphicsOutput> = match boot_services
-        .get_handle_for_protocol::<GraphicsOutput>()
-        .and_then(|gop_handle| boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle))
-    {
+    log::info!("Start construct_graphics_info");
+    let gop = match boot_services.locate_handle_buffer(SearchType::from_proto::<GraphicsOutput>()) {
         Ok(gop) => gop,
         Err(err) => {
-            panic!("Failed to locate_protocol, {:?}", err);
+            panic!("Failed to locate_handle_buffer, {:?}", err);
         }
     };
-    panic!("gop2");
+    log::info!("gop_handles: {:?}", gop.handles());
+    let mut gop = match boot_services.open_protocol_exclusive::<GraphicsOutput>(gop.handles()[1]) {
+        Ok(gop) => gop,
+        Err(err) => {
+            println!("before_panic");
+            panic!("Failed to handle_protocol, {:?}", err);
+        }
+    };
     let mut frame_buffer = gop.frame_buffer();
-    GraphicsFrameBuffer::new(frame_buffer.as_mut_ptr(), frame_buffer.size())
+    let buffer = GraphicsFrameBuffer::new(frame_buffer.as_mut_ptr(), frame_buffer.size());
+    log::info!("End construct_graphics_info");
+    buffer
 }
 
-fn pretty_print_entry_point_asm(entry_pointer: u64) {
+unsafe fn pretty_print_entry_point_asm(entry_pointer: u64) {
     let mut buf = [0; 16];
     unsafe {
         core::ptr::copy_nonoverlapping(entry_pointer as *const u8, buf.as_mut_ptr(), 16);
@@ -347,10 +353,10 @@ fn reset_text_output(boot_services: &BootServices) {
     simple_text_output_protocol.reset(true).unwrap();
 }
 
-#[panic_handler]
-fn panic_handler(info: &core::panic::PanicInfo) -> ! {
-    println!("[PANIC]: {}", info);
-    loop {
-        unsafe { asm!("hlt") };
-    }
-}
+// #[panic_handler]
+// fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+//     println!("[PANIC]: {}", info);
+//     loop {
+//         unsafe { asm!("hlt") };
+//     }
+// }

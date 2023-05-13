@@ -33,3 +33,11 @@ run: disk.img
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
 		-monitor stdio
+
+run_gdb: disk.img
+	qemu-system-x86_64 \
+		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
+		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
+		-drive file=disk.img,format=raw \
+		-monitor stdio \
+		-gdb tcp::12345 -S
