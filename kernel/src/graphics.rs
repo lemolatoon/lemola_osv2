@@ -30,6 +30,18 @@ impl Color {
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
+
+    pub const fn black() -> Self {
+        Self { r: 0, g: 0, b: 0 }
+    }
+
+    pub const fn white() -> Self {
+        Self {
+            r: 255,
+            g: 255,
+            b: 255,
+        }
+    }
 }
 
 pub struct PixcelWriter<T: MarkerColor> {
@@ -71,12 +83,20 @@ impl PixcelWritable for PixcelWriter<Rgb> {
         let offset = self.get_offset(x, y);
         self.write_pixcel_at_offset(offset, color);
     }
+
+    fn scroll(&self, dy: usize, color: Color) {
+        self.scroll(dy, color);
+    }
 }
 
 impl PixcelWritable for PixcelWriter<Bgr> {
     fn write(&self, x: usize, y: usize, color: Color) {
         let offset = self.get_offset(x, y);
         self.write_pixcel_at_offset(offset, color);
+    }
+
+    fn scroll(&self, dy: usize, color: Color) {
+        self.scroll(dy, color);
     }
 }
 
@@ -116,7 +136,7 @@ impl PixcelWriterBuilder {
     pub fn get_writer<'buf>(
         graphics_info: &GraphicsInfo,
         buf: &'buf mut [u8; Self::PIXCEL_WRITER_NECESSARY_BUF_SIZE],
-    ) -> &'buf dyn PixcelWriterTrait {
+    ) -> &'buf dyn AsciiWriter {
         let frame_buffer_base = graphics_info.base();
         let pixcels_per_scan_line = graphics_info.stride();
         let pixcel_format = graphics_info.pixcel_format();
@@ -159,9 +179,9 @@ impl PixcelWriterBuilder {
     }
 }
 
-impl<T: MarkerColor> PixcelWriter<T> {}
 pub trait PixcelWritable {
     fn write(&self, x: usize, y: usize, color: Color);
+    fn scroll(&self, dy: usize, bg_color: Color);
 }
 
 pub trait PixcelInfo {
@@ -169,6 +189,7 @@ pub trait PixcelInfo {
     fn get_num_pixcels(&self) -> usize;
     fn horizontal_resolution(&self) -> usize;
     fn vertical_resolution(&self) -> usize;
+    fn pixcels_per_scan_line(&self) -> usize;
 }
 
 pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo + AsciiWriter {}
@@ -191,10 +212,35 @@ impl<T: MarkerColor> PixcelInfo for PixcelWriter<T> {
     fn vertical_resolution(&self) -> usize {
         self.vertical_resolution
     }
+
+    fn pixcels_per_scan_line(&self) -> usize {
+        self.pixcels_per_scan_line
+    }
 }
 
-impl<T: MarkerColor> PixcelWriter<T> {
+impl<T: MarkerColor> PixcelWriter<T>
+where
+    Self: PixcelWritable,
+{
     fn get_offset(&self, x: usize, y: usize) -> usize {
         y * self.pixcels_per_scan_line + x
+    }
+
+    fn scroll(&self, dy: usize, bg_color: Color) {
+        let num_pixcels = self.get_num_pixcels();
+        let num_pixcels_to_scroll = num_pixcels - self.pixcels_per_scan_line * dy;
+        let src = unsafe {
+            self.frame_buffer_base
+                .add(self.pixcels_per_scan_line * dy * 4)
+        };
+        let dst = self.frame_buffer_base;
+        unsafe {
+            core::ptr::copy(src, dst, num_pixcels_to_scroll * 4);
+        }
+        for y in (num_pixcels_to_scroll..num_pixcels).step_by(self.pixcels_per_scan_line) {
+            for x in 0..self.pixcels_per_scan_line {
+                self.write(x, y, bg_color);
+            }
+        }
     }
 }

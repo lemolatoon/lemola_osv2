@@ -44,3 +44,6 @@ run_gdb: disk.img
 		-drive file=disk.img,format=raw \
 		-monitor stdio \
 		-gdb tcp::12345 -S
+
+kill:
+	killall -9 qemu-system-x86_64

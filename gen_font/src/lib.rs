@@ -1,9 +1,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn;
 
-const FILE_NAME: &str = "hankaku.txt";
 const FONT_DATA: &str = include_str!("../resources/hankaku.txt");
 
 #[proc_macro]

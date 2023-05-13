@@ -4,7 +4,10 @@
 use core::{arch::asm, panic::PanicInfo};
 
 use common::types::KernelMainArg;
-use kernel::graphics::{Color, PixcelWriterBuilder};
+use kernel::{
+    font::Writer,
+    graphics::{Color, PixcelWriterBuilder},
+};
 
 static mut _WRITER_BUF: [u8; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE] =
     [0; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE];
@@ -21,6 +24,18 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
         }
     }
     writer.write_string(0, 0, "Hello World!!", Color::new(255, 255, 255));
+    writer.write_string(0, 16, "Hello World!!", Color::new(255, 255, 255));
+    let mut writer = Writer::<25, 80>::new(writer);
+    writer.put_string("\nHello World!!\n");
+    writer.put_string("Today is a good day!\n");
+    for i in 0..1000usize {
+        for _ in 0..100000 {
+            // sleep
+            unsafe { core::ptr::write_volatile(0xb8000 as *mut u8, 0x0a) };
+        }
+        writer.put_char((('a' as u8) + (i % 26) as u8) as char);
+        writer.put_char('\n');
+    }
     loop {
         unsafe {
             asm!("hlt");
