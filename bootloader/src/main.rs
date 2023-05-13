@@ -5,16 +5,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use alloc::{string::String, vec};
-use common::types::{GraphicsFrameBuffer, KernelMainArg};
+use common::types::{GraphicsInfo, KernelMain, KernelMainArg, PixcelFormat};
 use core::arch::asm;
-use core::mem::MaybeUninit;
 use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
 use log;
 use uefi::proto::console::gop::GraphicsOutput;
-use uefi::table::boot::{ScopedProtocol, SearchType};
-use uefi::Identify;
+use uefi::table::boot::SearchType;
 use uefi_services::{print, println};
 
 use uefi::{
@@ -188,16 +186,16 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     unsafe { copy_load_segments(&elf, &kernel_buffer) };
     let entry_point = elf.ehdr.e_entry;
     log::info!("entry_point: {:#x}", entry_point);
-    // pretty_print_entry_point_asm(entry_point);
-    let graphics_frame_buffer = construct_graphics_info(&boot_services);
-    log::info!("graphics_frame_buffer: {:?}", graphics_frame_buffer);
+    unsafe { pretty_print_entry_point_asm(entry_point) };
+    let graphics_info = construct_graphics_info(&boot_services);
+    log::info!("graphics_frame_buffer: {:?}", graphics_info);
 
     drop(file_protocol);
     // exit_boot_services before boot
     let buf_size = boot_services.memory_map_size().map_size + 1024;
     let mut uninit_buf = Vec::with_capacity(buf_size);
     unsafe { uninit_buf.set_len(buf_size) };
-    let (system_table, memory_map) =
+    let (_system_table, _memory_map) =
         match system_table.exit_boot_services(image_handle, &mut uninit_buf) {
             Ok(ret) => ret,
             Err(err) => {
@@ -205,12 +203,9 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             }
         };
 
-    let kernel_main_arg = KernelMainArg {
-        graphics_frame_buffer,
-    };
+    let kernel_main_arg = KernelMainArg { graphics_info };
 
-    let kernel_main: extern "C" fn(arg: *const KernelMainArg) -> ! =
-        unsafe { core::mem::transmute(entry_point as usize) };
+    let kernel_main: KernelMain = unsafe { core::mem::transmute(entry_point as usize) };
 
     unsafe {
         asm!("mov rdi, {0}",
@@ -223,7 +218,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     Status::SUCCESS
 }
 
-fn construct_graphics_info(boot_services: &BootServices) -> GraphicsFrameBuffer {
+fn construct_graphics_info(boot_services: &BootServices) -> GraphicsInfo {
     log::info!("Start construct_graphics_info");
     let gop = match boot_services.locate_handle_buffer(SearchType::from_proto::<GraphicsOutput>()) {
         Ok(gop) => gop,
@@ -239,16 +234,32 @@ fn construct_graphics_info(boot_services: &BootServices) -> GraphicsFrameBuffer 
             panic!("Failed to handle_protocol, {:?}", err);
         }
     };
+    let mode = gop.current_mode_info();
     let mut frame_buffer = gop.frame_buffer();
-    let buffer = GraphicsFrameBuffer::new(frame_buffer.as_mut_ptr(), frame_buffer.size());
+    let pixcel_format = match mode.pixel_format() {
+        uefi::proto::console::gop::PixelFormat::Rgb => PixcelFormat::Rgb,
+        uefi::proto::console::gop::PixelFormat::Bgr => PixcelFormat::Bgr,
+        format @ (uefi::proto::console::gop::PixelFormat::Bitmask
+        | uefi::proto::console::gop::PixelFormat::BltOnly) => {
+            panic!("Unsupported pixcel format: {:?}", format)
+        }
+    };
+    let buffer = GraphicsInfo::new(
+        mode.resolution().0,
+        mode.resolution().1,
+        mode.stride(),
+        frame_buffer.as_mut_ptr(),
+        pixcel_format,
+    );
     log::info!("End construct_graphics_info");
     buffer
 }
 
 unsafe fn pretty_print_entry_point_asm(entry_pointer: u64) {
-    let mut buf = [0; 16];
+    const SIZE: usize = 20;
+    let mut buf = [0; SIZE];
     unsafe {
-        core::ptr::copy_nonoverlapping(entry_pointer as *const u8, buf.as_mut_ptr(), 16);
+        core::ptr::copy_nonoverlapping(entry_pointer as *const u8, buf.as_mut_ptr(), SIZE);
     }
     let mut decoder = Decoder::with_ip(64, &buf, entry_pointer, DecoderOptions::NONE);
 
