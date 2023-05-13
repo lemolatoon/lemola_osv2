@@ -25,7 +25,7 @@ fn gen_font_impl() -> anyhow::Result<TokenStream2> {
     let mut current_char_code = 0;
     let mut current_char_bytes: Vec<String> = Vec::with_capacity(16);
     for (idx, line) in FONT_DATA.lines().enumerate() {
-        if line == "" {
+        if line.is_empty() {
             continue;
         }
         if idx % 18 == 1 {

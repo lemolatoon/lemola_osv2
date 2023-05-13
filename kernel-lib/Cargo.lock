@@ -23,15 +23,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kernel"
-version = "0.1.0"
-dependencies = [
- "common",
- "gen_font",
- "kernel-lib",
-]
-
-[[package]]
 name = "kernel-lib"
 version = "0.1.0"
 dependencies = [

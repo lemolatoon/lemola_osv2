@@ -1,13 +1,11 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 #![feature(lang_items)]
 use core::{arch::asm, panic::PanicInfo};
 
 use common::types::KernelMainArg;
-use kernel::{
-    font::Writer,
-    graphics::{Color, PixcelWriterBuilder},
-};
+use kernel::graphics::PixcelWriterBuilder;
+use kernel_lib::{Color, Writer};
 
 static mut _WRITER_BUF: [u8; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE] =
     [0; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE];
@@ -23,18 +21,14 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
             writer.write(x, y, color);
         }
     }
-    writer.write_string(0, 0, "Hello World!!", Color::new(255, 255, 255));
-    writer.write_string(0, 16, "Hello World!!", Color::new(255, 255, 255));
     let mut writer = Writer::<25, 80>::new(writer);
-    writer.put_string("\nHello World!!\n");
-    writer.put_string("Today is a good day!\n");
-    for i in 0..1000usize {
-        for _ in 0..100000 {
+    for i in 0..20000usize {
+        for _ in 0..1000 {
             // sleep
             unsafe { core::ptr::write_volatile(0xb8000 as *mut u8, 0x0a) };
         }
         writer.put_char((('a' as u8) + (i % 26) as u8) as char);
-        writer.put_char('\n');
+        writer.put_char('\n')
     }
     loop {
         unsafe {

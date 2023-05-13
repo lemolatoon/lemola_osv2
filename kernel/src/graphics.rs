@@ -1,6 +1,5 @@
 use common::types::{GraphicsInfo, PixcelFormat};
-
-use crate::font::AsciiWriter;
+use kernel_lib::{AsciiWriter, Color, PixcelInfo, PixcelWritable, PixcelWriterTrait};
 
 pub struct Rgb;
 pub struct Bgr;
@@ -16,31 +15,6 @@ impl MarkerColor for Rgb {
 impl MarkerColor for Bgr {
     fn pixcel_format() -> PixcelFormat {
         PixcelFormat::Bgr
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-impl Color {
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
-    pub const fn black() -> Self {
-        Self { r: 0, g: 0, b: 0 }
-    }
-
-    pub const fn white() -> Self {
-        Self {
-            r: 255,
-            g: 255,
-            b: 255,
-        }
     }
 }
 
@@ -83,20 +57,12 @@ impl PixcelWritable for PixcelWriter<Rgb> {
         let offset = self.get_offset(x, y);
         self.write_pixcel_at_offset(offset, color);
     }
-
-    fn scroll(&self, dy: usize, color: Color) {
-        self.scroll(dy, color);
-    }
 }
 
 impl PixcelWritable for PixcelWriter<Bgr> {
     fn write(&self, x: usize, y: usize, color: Color) {
         let offset = self.get_offset(x, y);
         self.write_pixcel_at_offset(offset, color);
-    }
-
-    fn scroll(&self, dy: usize, color: Color) {
-        self.scroll(dy, color);
     }
 }
 
@@ -179,20 +145,6 @@ impl PixcelWriterBuilder {
     }
 }
 
-pub trait PixcelWritable {
-    fn write(&self, x: usize, y: usize, color: Color);
-    fn scroll(&self, dy: usize, bg_color: Color);
-}
-
-pub trait PixcelInfo {
-    fn get_pixcel_format(&self) -> PixcelFormat;
-    fn get_num_pixcels(&self) -> usize;
-    fn horizontal_resolution(&self) -> usize;
-    fn vertical_resolution(&self) -> usize;
-    fn pixcels_per_scan_line(&self) -> usize;
-}
-
-pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo + AsciiWriter {}
 impl PixcelWriterTrait for PixcelWriter<Rgb> {}
 impl PixcelWriterTrait for PixcelWriter<Bgr> {}
 
@@ -224,23 +176,5 @@ where
 {
     fn get_offset(&self, x: usize, y: usize) -> usize {
         y * self.pixcels_per_scan_line + x
-    }
-
-    fn scroll(&self, dy: usize, bg_color: Color) {
-        let num_pixcels = self.get_num_pixcels();
-        let num_pixcels_to_scroll = num_pixcels - self.pixcels_per_scan_line * dy;
-        let src = unsafe {
-            self.frame_buffer_base
-                .add(self.pixcels_per_scan_line * dy * 4)
-        };
-        let dst = self.frame_buffer_base;
-        unsafe {
-            core::ptr::copy(src, dst, num_pixcels_to_scroll * 4);
-        }
-        for y in (num_pixcels_to_scroll..num_pixcels).step_by(self.pixcels_per_scan_line) {
-            for x in 0..self.pixcels_per_scan_line {
-                self.write(x, y, bg_color);
-            }
-        }
     }
 }
