@@ -10,4 +10,5 @@ elf = { version = "0.7.2", features = ["nightly"], default-features = false}
 iced-x86 = { version = "1.18.0", features = ["no_std", "decoder", "intel"], default-features = false }
 log = "0.4.17"
 uefi = { version = "0.17.0", features = ["exts", "logger"] }
-uefi-services = { version = "0.14.0", default-features = false }
+uefi-services = { version = "0.14.0" }
+common = { path = "../common" }

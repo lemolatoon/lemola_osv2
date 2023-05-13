@@ -5,11 +5,16 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use alloc::{string::String, vec};
+use common::types::{GraphicsFrameBuffer, KernelMainArg};
 use core::arch::asm;
 use core::mem::MaybeUninit;
+use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
 use log;
+use uefi::proto::console::gop::GraphicsOutput;
+use uefi::table::boot::{ScopedProtocol, SearchType};
+use uefi::Identify;
 use uefi_services::{print, println};
 
 use uefi::{
@@ -46,11 +51,9 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     log::info!("Hello from uefi.rs");
 
-    const BUF_SIZE: usize = 2048;
-    let buf = MaybeUninit::<[u8; BUF_SIZE]>::uninit();
-
-    // Safety: function(memory_map) will initialize this buffer.
-    let mut uninit_buf = unsafe { buf.assume_init() };
+    let buf_size = boot_services.memory_map_size().map_size + 1024;
+    let mut uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
+    unsafe { uninit_buf.set_len(buf_size) };
     let memory_maps: Vec<_> = get_memory_map_iter(boot_services, &mut uninit_buf).collect();
 
     pretty_print_memory_map(memory_maps.iter());
@@ -185,13 +188,13 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     unsafe { copy_load_segments(&elf, &kernel_buffer) };
     let entry_point = elf.ehdr.e_entry;
     log::info!("entry_point: {:#x}", entry_point);
-    pretty_print_entry_point_asm(entry_point);
-
-    let kernel_main: extern "C" fn() -> ! = unsafe { core::mem::transmute(entry_point as usize) };
+    // pretty_print_entry_point_asm(entry_point);
+    let graphics_frame_buffer = construct_graphics_info(&boot_services);
+    log::info!("graphics_frame_buffer: {:?}", graphics_frame_buffer);
 
     drop(file_protocol);
     // exit_boot_services before boot
-    let mut buf_size = boot_services.memory_map_size().map_size;
+    let buf_size = boot_services.memory_map_size().map_size + 1024;
     let mut uninit_buf = Vec::with_capacity(buf_size);
     unsafe { uninit_buf.set_len(buf_size) };
     let (system_table, memory_map) =
@@ -202,13 +205,47 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             }
         };
 
-    kernel_main();
+    let kernel_main_arg = KernelMainArg {
+        graphics_frame_buffer,
+    };
+
+    let kernel_main: extern "C" fn(arg: *const KernelMainArg) -> ! =
+        unsafe { core::mem::transmute(entry_point as usize) };
+
+    unsafe {
+        asm!("mov rdi, {0}",
+                  "call {1}",
+     in(reg) &kernel_main_arg as *const _,
+     in(reg) kernel_main as usize,)
+    }
 
     #[allow(unreachable_code)]
     Status::SUCCESS
 }
 
-fn pretty_print_entry_point_asm(entry_pointer: u64) {
+fn construct_graphics_info(boot_services: &BootServices) -> GraphicsFrameBuffer {
+    log::info!("Start construct_graphics_info");
+    let gop = match boot_services.locate_handle_buffer(SearchType::from_proto::<GraphicsOutput>()) {
+        Ok(gop) => gop,
+        Err(err) => {
+            panic!("Failed to locate_handle_buffer, {:?}", err);
+        }
+    };
+    log::info!("gop_handles: {:?}", gop.handles());
+    let mut gop = match boot_services.open_protocol_exclusive::<GraphicsOutput>(gop.handles()[1]) {
+        Ok(gop) => gop,
+        Err(err) => {
+            println!("before_panic");
+            panic!("Failed to handle_protocol, {:?}", err);
+        }
+    };
+    let mut frame_buffer = gop.frame_buffer();
+    let buffer = GraphicsFrameBuffer::new(frame_buffer.as_mut_ptr(), frame_buffer.size());
+    log::info!("End construct_graphics_info");
+    buffer
+}
+
+unsafe fn pretty_print_entry_point_asm(entry_pointer: u64) {
     let mut buf = [0; 16];
     unsafe {
         core::ptr::copy_nonoverlapping(entry_pointer as *const u8, buf.as_mut_ptr(), 16);
@@ -288,11 +325,18 @@ fn calc_load_address_range(elf: &ElfBytes<AnyEndian>) -> (u64, u64) {
     (min, max)
 }
 
-fn get_memory_map_iter<'buf, const N: usize>(
+fn get_memory_map_iter<'buf>(
     boot_services: &BootServices,
-    buf: &'buf mut [u8; N],
+    buf: &'buf mut [u8],
 ) -> impl ExactSizeIterator<Item = &'buf MemoryDescriptor> + Clone {
-    let Ok((_, iter)) = boot_services.memory_map(buf) else { panic!("Buffer size {} was not enough", N); };
+    let len = buf.len();
+    log::info!("memory_map buffer address: {:p}", buf.as_ptr());
+    let (_, iter) = match boot_services.memory_map(unsafe { core::mem::transmute(buf) }) {
+        Ok(ret) => ret,
+        Err(err) => {
+            panic!("Failed to get_memory_map, {:?}, buffer_size: {}", err, len);
+        }
+    };
     iter
 }
 
@@ -319,10 +363,10 @@ fn reset_text_output(boot_services: &BootServices) {
     simple_text_output_protocol.reset(true).unwrap();
 }
 
-#[panic_handler]
-fn panic_handler(info: &core::panic::PanicInfo) -> ! {
-    println!("[PANIC]: {}", info);
-    loop {
-        unsafe { asm!("hlt") };
-    }
-}
+// #[panic_handler]
+// fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+//     println!("[PANIC]: {}", info);
+//     loop {
+//         unsafe { asm!("hlt") };
+//     }
+// }

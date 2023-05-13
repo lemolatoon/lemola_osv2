@@ -1,14 +1,19 @@
+.PHONY: FORCE
 PROFILE=debug
 
-.PHONY: FORCE
+ifeq ($(PROFILE),release)
+	CARGO_FLAGS=--release
+endif
 
 kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf: FORCE
 	cd kernel && \
-	cargo build 
+	cargo build $(CARGO_FLAGS)
 
 bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi: FORCE
 	cd bootloader && \
-	cargo build 
+	cargo build $(CARGO_FLAGS)
+
+build: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
 
 disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
 #	qemu-img create [-f format] [-o options] filename [size][preallocation]
@@ -31,3 +36,11 @@ run: disk.img
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
 		-monitor stdio
+
+run_gdb: disk.img
+	qemu-system-x86_64 \
+		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
+		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
+		-drive file=disk.img,format=raw \
+		-monitor stdio \
+		-gdb tcp::12345 -S

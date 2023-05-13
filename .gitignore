@@ -1,2 +1,4 @@
 /disk.img
 /kernel/target
+/common/target
+/target
