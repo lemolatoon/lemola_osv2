@@ -7,3 +7,11 @@ edition = "2021"
 
 [dependencies]
 common = { path = "../common" }
+gen_font = { path = "../gen_font" }
+kernel-lib = { path = "../kernel-lib" }
+once_cell = { version = "1.17.1", default-features = false }
+spin = "0.9.8"
+
+[features]
+std = []
+default = []

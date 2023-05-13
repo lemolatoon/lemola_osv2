@@ -1,4 +1,9 @@
+use core::fmt;
+
 use common::types::{GraphicsInfo, PixcelFormat};
+use kernel_lib::{AsciiWriter, Color, PixcelInfo, PixcelWritable, PixcelWriterTrait, Writer};
+use once_cell::unsync::OnceCell;
+use spin::Mutex;
 
 pub struct Rgb;
 pub struct Bgr;
@@ -14,19 +19,6 @@ impl MarkerColor for Rgb {
 impl MarkerColor for Bgr {
     fn pixcel_format() -> PixcelFormat {
         PixcelFormat::Bgr
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-impl Color {
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
     }
 }
 
@@ -106,6 +98,10 @@ impl PixcelWriter<Bgr> {
 
 pub struct PixcelWriterBuilder;
 
+/// Safety: frame_buffer_base is write only.
+unsafe impl<T: MarkerColor> Sync for PixcelWriter<T> {}
+unsafe impl<T: MarkerColor> Send for PixcelWriter<T> {}
+
 impl PixcelWriterBuilder {
     pub const PIXCEL_WRITER_NECESSARY_BUF_SIZE: usize = core::cmp::max(
         core::mem::size_of::<PixcelWriter<Rgb>>(),
@@ -114,7 +110,7 @@ impl PixcelWriterBuilder {
     pub fn get_writer<'buf>(
         graphics_info: &GraphicsInfo,
         buf: &'buf mut [u8; Self::PIXCEL_WRITER_NECESSARY_BUF_SIZE],
-    ) -> &'buf dyn PixcelWriterTrait {
+    ) -> &'buf (dyn AsciiWriter + Send + Sync) {
         let frame_buffer_base = graphics_info.base();
         let pixcels_per_scan_line = graphics_info.stride();
         let pixcel_format = graphics_info.pixcel_format();
@@ -157,19 +153,6 @@ impl PixcelWriterBuilder {
     }
 }
 
-impl<T: MarkerColor> PixcelWriter<T> {}
-pub trait PixcelWritable {
-    fn write(&self, x: usize, y: usize, color: Color);
-}
-
-pub trait PixcelInfo {
-    fn get_pixcel_format(&self) -> PixcelFormat;
-    fn get_num_pixcels(&self) -> usize;
-    fn horizontal_resolution(&self) -> usize;
-    fn vertical_resolution(&self) -> usize;
-}
-
-pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo {}
 impl PixcelWriterTrait for PixcelWriter<Rgb> {}
 impl PixcelWriterTrait for PixcelWriter<Bgr> {}
 
@@ -189,10 +172,67 @@ impl<T: MarkerColor> PixcelInfo for PixcelWriter<T> {
     fn vertical_resolution(&self) -> usize {
         self.vertical_resolution
     }
+
+    fn pixcels_per_scan_line(&self) -> usize {
+        self.pixcels_per_scan_line
+    }
 }
 
-impl<T: MarkerColor> PixcelWriter<T> {
+impl<T: MarkerColor> PixcelWriter<T>
+where
+    Self: PixcelWritable,
+{
     fn get_offset(&self, x: usize, y: usize) -> usize {
         y * self.pixcels_per_scan_line + x
     }
+}
+
+pub const N_CHAR_PER_LINE: usize = 80;
+pub const N_WRITEABLE_LINE: usize = 25;
+static mut _WRITER_BUF: [u8; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE] =
+    [0; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE];
+static WRITER: Mutex<OnceCell<Writer<'static, N_WRITEABLE_LINE, N_CHAR_PER_LINE>>> =
+    Mutex::new(OnceCell::new());
+
+pub fn init_graphics(graphics_info: GraphicsInfo) {
+    // clear
+    for y in 0..graphics_info.vertical_resolution() {
+        for x in 0..graphics_info.horizontal_resolution() {
+            let offset = y * graphics_info.stride() + x;
+            unsafe {
+                *graphics_info.base().add(offset * 4 + 0) = 0;
+                *graphics_info.base().add(offset * 4 + 1) = 0;
+                *graphics_info.base().add(offset * 4 + 2) = 0;
+            }
+        }
+    }
+    let writer = WRITER.lock();
+    writer.get_or_init(|| {
+        let pixcel_writer =
+            PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut _WRITER_BUF });
+        let writer = Writer::new(pixcel_writer);
+        writer
+    });
+}
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::graphics::_print(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments) {
+    use core::fmt::Write;
+    WRITER
+        .lock()
+        .get_mut()
+        .expect("WRITER NOT INITIALIZED")
+        .write_fmt(args)
+        .unwrap();
 }

@@ -44,3 +44,22 @@ run_gdb: disk.img
 		-drive file=disk.img,format=raw \
 		-monitor stdio \
 		-gdb tcp::12345 -S
+	
+test_kernel:
+	cd kernel-lib && \
+	cargo test --features "std"
+
+clippy:
+	cd kernel && \
+	cargo clippy
+	cd common && \
+	cargo clippy
+	cd gen_font && \
+	cargo clippy
+	cd bootloader && \
+	cargo clippy
+	cd kernel-lib && \
+	cargo clippy
+
+kill:
+	killall -9 qemu-system-x86_64

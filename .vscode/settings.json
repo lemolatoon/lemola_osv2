@@ -4,7 +4,7 @@
     "rust-analyzer.linkedProjects": [
         "./kernel/Cargo.toml",
         "./bootloader/Cargo.toml",
-        "./bootloader/Cargo.toml",
-        "./bootloader/Cargo.toml"
+        "./gen_font/Cargo.toml",
+        "./kernel-lib/Cargo.toml"
     ],
 }
