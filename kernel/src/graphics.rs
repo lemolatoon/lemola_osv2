@@ -1,5 +1,7 @@
 use common::types::{GraphicsInfo, PixcelFormat};
 
+use crate::font::AsciiWriter;
+
 pub struct Rgb;
 pub struct Bgr;
 
@@ -169,7 +171,7 @@ pub trait PixcelInfo {
     fn vertical_resolution(&self) -> usize;
 }
 
-pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo {}
+pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo + AsciiWriter {}
 impl PixcelWriterTrait for PixcelWriter<Rgb> {}
 impl PixcelWriterTrait for PixcelWriter<Bgr> {}
 

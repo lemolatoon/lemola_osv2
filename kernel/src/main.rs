@@ -14,12 +14,13 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     let arg = unsafe { (*arg).clone() };
     let graphics_info = arg.graphics_info;
     let writer = PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut _WRITER_BUF });
-    for y in 0..(writer.vertical_resolution() / 2) {
-        for x in 0..(writer.horizontal_resolution() / 2) {
-            let color = Color::new(255, 0, 0);
+    for y in 0..(writer.vertical_resolution()) {
+        for x in 0..(writer.horizontal_resolution()) {
+            let color = Color::new(0, 0, 0);
             writer.write(x, y, color);
         }
     }
+    writer.write_string(0, 0, "Hello World!!", Color::new(255, 255, 255));
     loop {
         unsafe {
             asm!("hlt");
