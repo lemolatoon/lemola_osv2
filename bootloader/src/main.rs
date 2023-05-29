@@ -10,7 +10,6 @@ use core::arch::asm;
 use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
-use log;
 use uefi::proto::console::gop::GraphicsOutput;
 use uefi::table::boot::SearchType;
 use uefi_services::{print, println};
@@ -50,9 +49,13 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     log::info!("Hello from uefi.rs");
 
     let buf_size = boot_services.memory_map_size().map_size + 1024;
-    let mut uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
-    unsafe { uninit_buf.set_len(buf_size) };
-    let memory_maps: Vec<_> = get_memory_map_iter(boot_services, &mut uninit_buf).collect();
+    let mut dont_use_this_uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
+    #[allow(clippy::uninit_vec)]
+    unsafe {
+        dont_use_this_uninit_buf.set_len(buf_size)
+    };
+    let memory_maps: Vec<_> =
+        get_memory_map_iter(boot_services, &mut dont_use_this_uninit_buf).collect();
 
     pretty_print_memory_map(memory_maps.iter());
     pretty_print_memory_map(
@@ -156,23 +159,22 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     let memory_type_at_allocated_pointer_before = memory_maps
         .iter()
-        .filter(|memory_descriptor| {
+        .find(|memory_descriptor| {
             memory_descriptor.phys_start <= allocated_pointer
                 && allocated_pointer
                     < memory_descriptor.phys_start + memory_descriptor.page_count * 4 * 1024
         })
-        .next()
         .unwrap()
         .ty;
-    let memory_type_at_allocated_pointer = get_memory_map_iter(boot_services, &mut uninit_buf)
-        .filter(|memory_descriptor| {
-            memory_descriptor.phys_start <= allocated_pointer
-                && allocated_pointer
-                    < memory_descriptor.phys_start + memory_descriptor.page_count * 4 * 1024
-        })
-        .next()
-        .unwrap()
-        .ty;
+    let memory_type_at_allocated_pointer =
+        get_memory_map_iter(boot_services, &mut dont_use_this_uninit_buf)
+            .find(|memory_descriptor| {
+                memory_descriptor.phys_start <= allocated_pointer
+                    && allocated_pointer
+                        < memory_descriptor.phys_start + memory_descriptor.page_count * 4 * 1024
+            })
+            .unwrap()
+            .ty;
     log::info!(
         "MemoryType at {:#x} before: {:?}",
         allocated_pointer,
@@ -187,16 +189,19 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let entry_point = elf.ehdr.e_entry;
     log::info!("entry_point: {:#x}", entry_point);
     unsafe { pretty_print_entry_point_asm(entry_point) };
-    let graphics_info = construct_graphics_info(&boot_services);
+    let graphics_info = construct_graphics_info(boot_services);
     log::info!("graphics_frame_buffer: {:?}", graphics_info);
 
     drop(file_protocol);
     // exit_boot_services before boot
     let buf_size = boot_services.memory_map_size().map_size + 1024;
-    let mut uninit_buf = Vec::with_capacity(buf_size);
-    unsafe { uninit_buf.set_len(buf_size) };
+    let mut dont_use_this_uninit_buf = Vec::with_capacity(buf_size);
+    #[allow(clippy::uninit_vec)]
+    unsafe {
+        dont_use_this_uninit_buf.set_len(buf_size)
+    };
     let (_system_table, _memory_map) =
-        match system_table.exit_boot_services(image_handle, &mut uninit_buf) {
+        match system_table.exit_boot_services(image_handle, &mut dont_use_this_uninit_buf) {
             Ok(ret) => ret,
             Err(err) => {
                 panic!("Failed to exit_boot_services, {:?}", err);
@@ -316,10 +321,20 @@ unsafe fn pretty_print_entry_point_asm(entry_pointer: u64) {
 unsafe fn copy_load_segments(elf: &ElfBytes<AnyEndian>, kernel_loaded_buffer: &[u8]) {
     for program_header in elf.segments().unwrap() {
         if program_header.p_type == elf::abi::PT_LOAD {
-            let src = &kernel_loaded_buffer[program_header.p_offset as usize
-                ..(program_header.p_offset + program_header.p_memsz) as usize];
-            let dst = program_header.p_vaddr as *mut u8;
-            unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
+            let segment_ptr =
+                (kernel_loaded_buffer.as_ptr() as u64 + program_header.p_offset) as *const u8;
+            let to = program_header.p_vaddr as *mut u8;
+            let len = program_header.p_filesz as usize;
+            // copy .elf content
+            unsafe { core::ptr::copy_nonoverlapping(segment_ptr, to, len) };
+            // fill zero
+            log::info!(
+                "p_memsz: 0x{:x}, p_filesz: 0x{:x}",
+                program_header.p_memsz,
+                program_header.p_filesz
+            );
+            let remain_bytes = program_header.p_memsz as usize - program_header.p_filesz as usize;
+            unsafe { core::ptr::write_bytes(to.add(len), 0, remain_bytes) };
         }
     }
 }

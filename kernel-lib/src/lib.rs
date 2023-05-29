@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod logger;
 use core::fmt;
 
 use common::types::PixcelFormat;
@@ -175,8 +176,7 @@ impl core::fmt::Debug for &(dyn AsciiWriter + Send + Sync) {
 
 #[cfg(test)]
 mod test {
-    #![feature(restricted_std)]
-    use core::{borrow::BorrowMut, cell::RefCell};
+    use core::cell::RefCell;
 
     use super::*;
     const N_ROW: usize = 10;
@@ -187,6 +187,7 @@ mod test {
     pub struct MockWriter {
         pub buffer: RefCell<[[char; N_COLUMN]; N_ROW]>,
     }
+    unsafe impl Sync for MockWriter {} // for test only
     impl MockWriter {
         pub const fn new() -> Self {
             Self {
@@ -195,7 +196,7 @@ mod test {
         }
     }
     impl PixcelWritable for MockWriter {
-        fn write(&self, x: usize, y: usize, color: Color) {
+        fn write(&self, _x: usize, _y: usize, _color: Color) {
             panic!("should not be called")
         }
     }
@@ -273,6 +274,12 @@ mod test {
         for i in 0..200usize {
             writer.put_char((('a' as u8) + (i % 26) as u8) as char);
             writer.put_char('\n')
+        }
+
+        for idx in 0..10 {
+            let mut expected = [' '; 10];
+            expected[0] = (('a' as u8) + ((190 + idx) % 26) as u8) as char;
+            assert_eq!(mock_writer.buffer.borrow()[idx], expected);
         }
     }
 }

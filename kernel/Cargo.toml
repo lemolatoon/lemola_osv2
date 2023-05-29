@@ -9,6 +9,7 @@ edition = "2021"
 common = { path = "../common" }
 gen_font = { path = "../gen_font" }
 kernel-lib = { path = "../kernel-lib" }
+log = "0.4.17"
 once_cell = { version = "1.17.1", default-features = false }
 spin = "0.9.8"
 

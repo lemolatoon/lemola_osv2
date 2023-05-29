@@ -44,10 +44,66 @@ run_gdb: disk.img
 		-drive file=disk.img,format=raw \
 		-monitor stdio \
 		-gdb tcp::12345 -S
+# on gdb
+# target remote localhost:12345
 	
 test_kernel:
 	cd kernel-lib && \
 	cargo test --features "std"
+
+test_font:
+	cd gen_font && \
+	cargo test
+
+test_all: test_kernel test_font
+	
+fmt: 
+	cd kernel && \
+	cargo fmt 
+	cd common && \
+	cargo fmt 
+	cd gen_font && \
+	cargo fmt 
+	cd bootloader && \
+	cargo fmt 
+	cd kernel-lib && \
+	cargo fmt 
+
+check: 
+	cd kernel && \
+	cargo check 
+	cd common && \
+	cargo check 
+	cd gen_font && \
+	cargo check 
+	cd bootloader && \
+	cargo check 
+	cd kernel-lib && \
+	cargo check 
+
+fmt_ci: 
+	cd kernel && \
+	cargo fmt --all -- --check
+	cd common && \
+	cargo fmt --all -- --check
+	cd gen_font && \
+	cargo fmt --all -- --check
+	cd bootloader && \
+	cargo fmt --all -- --check
+	cd kernel-lib && \
+	cargo fmt --all -- --check
+
+clippy_ci:
+	cd kernel && \
+	cargo clippy -- -D warnings
+	cd common && \
+	cargo clippy -- -D warnings
+	cd gen_font && \
+	cargo clippy -- -D warnings
+	cd bootloader && \
+	cargo clippy -- -D warnings
+	cd kernel-lib && \
+	cargo clippy -- -D warnings
 
 clippy:
 	cd kernel && \
