@@ -9,7 +9,7 @@ use kernel::{
     graphics::{init_graphics, init_logger},
     println,
 };
-use kernel_lib::Color;
+use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
@@ -32,6 +32,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
 
+    pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
     loop {
         unsafe {
             asm!("hlt");

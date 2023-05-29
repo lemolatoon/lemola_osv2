@@ -1,9 +1,7 @@
 use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
-use kernel_lib::{
-    logger::CharWriter, AsciiWriter, Color, PixcelInfo, PixcelWritable, PixcelWriterTrait, Writer,
-};
+use kernel_lib::{logger::CharWriter, AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer};
 use once_cell::unsync::OnceCell;
 use spin::Mutex;
 
@@ -159,9 +157,6 @@ impl PixcelWriterBuilder {
         }
     }
 }
-
-impl PixcelWriterTrait for PixcelWriter<Rgb> {}
-impl PixcelWriterTrait for PixcelWriter<Bgr> {}
 
 impl<T: MarkerColor> PixcelInfo for PixcelWriter<T> {
     fn get_pixcel_format(&self) -> PixcelFormat {

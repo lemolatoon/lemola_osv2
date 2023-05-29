@@ -2,10 +2,13 @@
 
 pub mod futures;
 pub mod logger;
+pub mod render;
+pub mod shapes;
 use core::fmt;
 
 use common::types::PixcelFormat;
 use gen_font::gen_font;
+use render::Renderer;
 
 gen_font!();
 
@@ -40,13 +43,24 @@ pub trait PixcelInfo {
     fn vertical_resolution(&self) -> usize;
     fn pixcels_per_scan_line(&self) -> usize;
 }
+
 pub trait PixcelWritable {
     fn write(&self, x: usize, y: usize, color: Color);
+    fn fill_rect(
+        &self,
+        (pos_x, pos_y): (usize, usize),
+        (size_x, size_y): (usize, usize),
+        color: Color,
+    ) {
+        for y in pos_y..pos_y + size_y {
+            for x in pos_x..pos_x + size_x {
+                self.write(x, y, color);
+            }
+        }
+    }
 }
 
-pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo + AsciiWriter {}
-
-pub trait AsciiWriter: PixcelWritable + PixcelInfo {
+pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {
     fn write_ascii(&self, x: usize, y: usize, c: char, bg_color: Color, fg_color: Color) {
         let Some(font) = FONT.get(c as usize) else {
             return;
