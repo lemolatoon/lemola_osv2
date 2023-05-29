@@ -10,7 +10,6 @@ use core::arch::asm;
 use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
-use log;
 use uefi::proto::console::gop::GraphicsOutput;
 use uefi::table::boot::SearchType;
 use uefi_services::{print, println};
@@ -50,9 +49,13 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     log::info!("Hello from uefi.rs");
 
     let buf_size = boot_services.memory_map_size().map_size + 1024;
-    let mut uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
-    unsafe { uninit_buf.set_len(buf_size) };
-    let memory_maps: Vec<_> = get_memory_map_iter(boot_services, &mut uninit_buf).collect();
+    let mut dont_use_this_uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
+    #[allow(clippy::uninit_vec)]
+    unsafe {
+        dont_use_this_uninit_buf.set_len(buf_size)
+    };
+    let memory_maps: Vec<_> =
+        get_memory_map_iter(boot_services, &mut dont_use_this_uninit_buf).collect();
 
     pretty_print_memory_map(memory_maps.iter());
     pretty_print_memory_map(
@@ -156,23 +159,22 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     let memory_type_at_allocated_pointer_before = memory_maps
         .iter()
-        .filter(|memory_descriptor| {
+        .find(|memory_descriptor| {
             memory_descriptor.phys_start <= allocated_pointer
                 && allocated_pointer
                     < memory_descriptor.phys_start + memory_descriptor.page_count * 4 * 1024
         })
-        .next()
         .unwrap()
         .ty;
-    let memory_type_at_allocated_pointer = get_memory_map_iter(boot_services, &mut uninit_buf)
-        .filter(|memory_descriptor| {
-            memory_descriptor.phys_start <= allocated_pointer
-                && allocated_pointer
-                    < memory_descriptor.phys_start + memory_descriptor.page_count * 4 * 1024
-        })
-        .next()
-        .unwrap()
-        .ty;
+    let memory_type_at_allocated_pointer =
+        get_memory_map_iter(boot_services, &mut dont_use_this_uninit_buf)
+            .find(|memory_descriptor| {
+                memory_descriptor.phys_start <= allocated_pointer
+                    && allocated_pointer
+                        < memory_descriptor.phys_start + memory_descriptor.page_count * 4 * 1024
+            })
+            .unwrap()
+            .ty;
     log::info!(
         "MemoryType at {:#x} before: {:?}",
         allocated_pointer,
@@ -187,16 +189,19 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let entry_point = elf.ehdr.e_entry;
     log::info!("entry_point: {:#x}", entry_point);
     unsafe { pretty_print_entry_point_asm(entry_point) };
-    let graphics_info = construct_graphics_info(&boot_services);
+    let graphics_info = construct_graphics_info(boot_services);
     log::info!("graphics_frame_buffer: {:?}", graphics_info);
 
     drop(file_protocol);
     // exit_boot_services before boot
     let buf_size = boot_services.memory_map_size().map_size + 1024;
-    let mut uninit_buf = Vec::with_capacity(buf_size);
-    unsafe { uninit_buf.set_len(buf_size) };
+    let mut dont_use_this_uninit_buf = Vec::with_capacity(buf_size);
+    #[allow(clippy::uninit_vec)]
+    unsafe {
+        dont_use_this_uninit_buf.set_len(buf_size)
+    };
     let (_system_table, _memory_map) =
-        match system_table.exit_boot_services(image_handle, &mut uninit_buf) {
+        match system_table.exit_boot_services(image_handle, &mut dont_use_this_uninit_buf) {
             Ok(ret) => ret,
             Err(err) => {
                 panic!("Failed to exit_boot_services, {:?}", err);

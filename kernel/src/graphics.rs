@@ -51,7 +51,7 @@ impl PixcelWriter<Rgb> {
     pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
         let offset = offset * 4;
         unsafe {
-            *self.frame_buffer_base.add(offset + 0) = color.r;
+            *self.frame_buffer_base.add(offset) = color.r;
             *self.frame_buffer_base.add(offset + 1) = color.g;
             *self.frame_buffer_base.add(offset + 2) = color.b;
         }
@@ -91,7 +91,7 @@ impl PixcelWriter<Bgr> {
     pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
         let offset = offset * 4;
         unsafe {
-            *self.frame_buffer_base.add(offset + 0) = color.b;
+            *self.frame_buffer_base.add(offset) = color.b;
             *self.frame_buffer_base.add(offset + 1) = color.g;
             *self.frame_buffer_base.add(offset + 2) = color.r;
         }
@@ -138,8 +138,7 @@ impl PixcelWriterBuilder {
                         1,
                     );
                 };
-                let pixcel_writer = unsafe { &*(buf.as_ptr() as *const PixcelWriter<Rgb>) };
-                pixcel_writer
+                unsafe { &*(buf.as_ptr() as *const PixcelWriter<Rgb>) }
             }
             PixcelFormat::Bgr => {
                 let pixcel_writer = PixcelWriter::<Bgr>::new_raw(
@@ -155,8 +154,7 @@ impl PixcelWriterBuilder {
                         1,
                     );
                 };
-                let pixcel_writer = unsafe { &*(buf.as_ptr() as *const PixcelWriter<Bgr>) };
-                pixcel_writer
+                unsafe { &*(buf.as_ptr() as *const PixcelWriter<Bgr>) }
             }
         }
     }
@@ -209,7 +207,7 @@ pub fn init_graphics(graphics_info: GraphicsInfo) {
         for x in 0..graphics_info.horizontal_resolution() {
             let offset = y * graphics_info.stride() + x;
             unsafe {
-                *graphics_info.base().add(offset * 4 + 0) = 0;
+                *graphics_info.base().add(offset * 4) = 0;
                 *graphics_info.base().add(offset * 4 + 1) = 0;
                 *graphics_info.base().add(offset * 4 + 2) = 0;
             }

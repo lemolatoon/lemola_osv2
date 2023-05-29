@@ -51,6 +51,12 @@ test_kernel:
 	cd kernel-lib && \
 	cargo test --features "std"
 
+test_font:
+	cd gen_font && \
+	cargo test
+
+test_all: test_kernel test_font
+
 clippy:
 	cd kernel && \
 	cargo clippy
