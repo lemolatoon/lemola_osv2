@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use alloc::{string::String, vec};
 use common::types::{GraphicsInfo, KernelMain, KernelMainArg, PixcelFormat};
 use core::arch::asm;
+use core::mem::size_of;
 use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};
@@ -316,10 +317,20 @@ unsafe fn pretty_print_entry_point_asm(entry_pointer: u64) {
 unsafe fn copy_load_segments(elf: &ElfBytes<AnyEndian>, kernel_loaded_buffer: &[u8]) {
     for program_header in elf.segments().unwrap() {
         if program_header.p_type == elf::abi::PT_LOAD {
-            let src = &kernel_loaded_buffer[program_header.p_offset as usize
-                ..(program_header.p_offset + program_header.p_memsz) as usize];
-            let dst = program_header.p_vaddr as *mut u8;
-            unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
+            let segment_ptr =
+                (kernel_loaded_buffer.as_ptr() as u64 + program_header.p_offset) as *const u8;
+            let to = program_header.p_vaddr as *mut u8;
+            let len = program_header.p_filesz as usize;
+            // copy .elf content
+            unsafe { core::ptr::copy_nonoverlapping(segment_ptr, to, len) };
+            // fill zero
+            log::info!(
+                "p_memsz: 0x{:x}, p_filesz: 0x{:x}",
+                program_header.p_memsz,
+                program_header.p_filesz
+            );
+            let remain_bytes = program_header.p_memsz as usize - program_header.p_filesz as usize;
+            unsafe { core::ptr::write_bytes(to.add(len), 0, remain_bytes) };
         }
     }
 }
