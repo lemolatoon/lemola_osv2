@@ -5,6 +5,10 @@
         "./kernel/Cargo.toml",
         "./bootloader/Cargo.toml",
         "./gen_font/Cargo.toml",
-        "./kernel-lib/Cargo.toml"
+        "./kernel-lib/Cargo.toml",
+        "./kernel/Cargo.toml",
+        "./kernel/Cargo.toml",
+        "./kernel/Cargo.toml",
+        "./kernel/Cargo.toml"
     ],
 }

@@ -3,6 +3,8 @@
 #![feature(lang_items)]
 use core::{arch::asm, panic::PanicInfo};
 
+pub extern crate alloc;
+use alloc::vec::Vec;
 use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
@@ -33,6 +35,13 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
 
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
+    let mut vec = Vec::new();
+    for i in 0..10 {
+        vec.push(i);
+    }
+    for i in vec {
+        println!("vec: {}", i);
+    }
     loop {
         unsafe {
             asm!("hlt");
