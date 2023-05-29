@@ -201,7 +201,12 @@ static mut _WRITER_BUF: [u8; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SI
 pub static WRITER: CharWriter<N_CHAR_PER_LINE, N_WRITEABLE_LINE> =
     CharWriter(Mutex::new(OnceCell::new()));
 
-pub fn init_graphics(graphics_info: GraphicsInfo) {
+pub fn get_pixcel_writer() -> Option<&'static (dyn AsciiWriter + Send + Sync)> {
+    Some(WRITER.lock().get()?.pixcel_writer())
+}
+
+/// init graphics and return pixcel_writer
+pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter + Send + Sync) {
     // clear
     for y in 0..graphics_info.vertical_resolution() {
         for x in 0..graphics_info.horizontal_resolution() {
@@ -214,12 +219,13 @@ pub fn init_graphics(graphics_info: GraphicsInfo) {
         }
     }
     let writer = WRITER.0.lock();
+    let pixcel_writer =
+        PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut _WRITER_BUF });
     writer.get_or_init(|| {
-        let pixcel_writer =
-            PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut _WRITER_BUF });
         let writer = Writer::new(pixcel_writer);
         writer
     });
+    pixcel_writer
 }
 
 pub fn init_logger() {

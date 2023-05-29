@@ -72,6 +72,16 @@ pub struct CharWriter<const N_CHAR_PER_LINE: usize, const N_WRITEABLE_LINE: usiz
     pub Mutex<OnceCell<Writer<'static, N_WRITEABLE_LINE, N_CHAR_PER_LINE>>>,
 );
 
+impl<const N_CHAR_PER_LINE: usize, const N_WRITEABLE_LINE: usize>
+    CharWriter<N_CHAR_PER_LINE, N_WRITEABLE_LINE>
+{
+    pub fn lock(
+        &self,
+    ) -> spin::MutexGuard<'_, OnceCell<Writer<'static, N_WRITEABLE_LINE, N_CHAR_PER_LINE>>> {
+        self.0.lock()
+    }
+}
+
 impl<const N_CHAR_PER_LINE: usize, const N_WRITEABLE_LINE: usize> log::Log
     for CharWriter<N_CHAR_PER_LINE, N_WRITEABLE_LINE>
 {

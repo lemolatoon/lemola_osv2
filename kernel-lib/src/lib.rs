@@ -115,6 +115,10 @@ impl<'a, const N_ROW: usize, const N_COLUMN: usize> Writer<'a, N_ROW, N_COLUMN> 
         self.buffer[self.position.y][self.position.x] = c;
     }
 
+    pub fn pixcel_writer(&self) -> &'a (dyn AsciiWriter + Send + Sync + 'a) {
+        self.writer
+    }
+
     pub fn put_char(&mut self, c: char) {
         if c == '\n' {
             self.new_line();

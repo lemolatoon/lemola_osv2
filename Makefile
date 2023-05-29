@@ -119,3 +119,4 @@ clippy:
 
 kill:
 	killall -9 qemu-system-x86_64
+	git checkout HEAD ovmf/lemola_os_ovmf_vars.fd

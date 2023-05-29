@@ -9,12 +9,13 @@ use kernel::{
     graphics::{init_graphics, init_logger},
     println,
 };
+use kernel_lib::Color;
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     let arg = unsafe { (*arg).clone() };
     let graphics_info = arg.graphics_info;
-    init_graphics(graphics_info);
+    let pixcel_writer = init_graphics(graphics_info);
     println!("global WRITER initialized?");
     writeln!(
         kernel::graphics::WRITER.0.lock().get_mut().unwrap(),
@@ -23,10 +24,14 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     .unwrap();
 
     init_logger();
+
     log::info!("global logger initialized!");
     for i in 0..10 {
         println!("Hello lemola os!!! {}", i);
     }
+
+    pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
+
     loop {
         unsafe {
             asm!("hlt");
