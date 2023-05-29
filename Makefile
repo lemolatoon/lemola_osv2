@@ -44,6 +44,8 @@ run_gdb: disk.img
 		-drive file=disk.img,format=raw \
 		-monitor stdio \
 		-gdb tcp::12345 -S
+# on gdb
+# target remote localhost:12345
 	
 test_kernel:
 	cd kernel-lib && \

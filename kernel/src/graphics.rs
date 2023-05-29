@@ -1,7 +1,9 @@
-use core::fmt;
+use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
-use kernel_lib::{AsciiWriter, Color, PixcelInfo, PixcelWritable, PixcelWriterTrait, Writer};
+use kernel_lib::{
+    logger::CharWriter, AsciiWriter, Color, PixcelInfo, PixcelWritable, PixcelWriterTrait, Writer,
+};
 use once_cell::unsync::OnceCell;
 use spin::Mutex;
 
@@ -103,7 +105,14 @@ unsafe impl<T: MarkerColor> Sync for PixcelWriter<T> {}
 unsafe impl<T: MarkerColor> Send for PixcelWriter<T> {}
 
 impl PixcelWriterBuilder {
-    pub const PIXCEL_WRITER_NECESSARY_BUF_SIZE: usize = core::cmp::max(
+    const fn cmp_max(a: usize, b: usize) -> usize {
+        if a > b {
+            a
+        } else {
+            b
+        }
+    }
+    pub const PIXCEL_WRITER_NECESSARY_BUF_SIZE: usize = Self::cmp_max(
         core::mem::size_of::<PixcelWriter<Rgb>>(),
         core::mem::size_of::<PixcelWriter<Bgr>>(),
     );
@@ -191,8 +200,8 @@ pub const N_CHAR_PER_LINE: usize = 80;
 pub const N_WRITEABLE_LINE: usize = 25;
 static mut _WRITER_BUF: [u8; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE] =
     [0; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE];
-static WRITER: Mutex<OnceCell<Writer<'static, N_WRITEABLE_LINE, N_CHAR_PER_LINE>>> =
-    Mutex::new(OnceCell::new());
+pub static WRITER: CharWriter<N_CHAR_PER_LINE, N_WRITEABLE_LINE> =
+    CharWriter(Mutex::new(OnceCell::new()));
 
 pub fn init_graphics(graphics_info: GraphicsInfo) {
     // clear
@@ -206,13 +215,22 @@ pub fn init_graphics(graphics_info: GraphicsInfo) {
             }
         }
     }
-    let writer = WRITER.lock();
+    let writer = WRITER.0.lock();
     writer.get_or_init(|| {
         let pixcel_writer =
             PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut _WRITER_BUF });
         let writer = Writer::new(pixcel_writer);
         writer
     });
+}
+
+pub fn init_logger() {
+    log::set_logger(&WRITER)
+        .map(|()| {
+            log::set_max_level(log::LevelFilter::Trace);
+            log::info!("logger initialized");
+        })
+        .unwrap();
 }
 
 #[macro_export]
@@ -230,6 +248,7 @@ macro_rules! println {
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
     WRITER
+        .0
         .lock()
         .get_mut()
         .expect("WRITER NOT INITIALIZED")

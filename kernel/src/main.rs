@@ -4,14 +4,27 @@
 use core::{arch::asm, panic::PanicInfo};
 
 use common::types::KernelMainArg;
-use kernel::{graphics::init_graphics, println};
+use core::fmt::Write;
+use kernel::{
+    graphics::{init_graphics, init_logger},
+    println,
+};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     let arg = unsafe { (*arg).clone() };
     let graphics_info = arg.graphics_info;
     init_graphics(graphics_info);
-    for i in 0..100 {
+    println!("global WRITER initialized?");
+    writeln!(
+        kernel::graphics::WRITER.0.lock().get_mut().unwrap(),
+        "Hello lemola os!!!"
+    )
+    .unwrap();
+
+    init_logger();
+    log::info!("global logger initialized!");
+    for i in 0..10 {
         println!("Hello lemola os!!! {}", i);
     }
     loop {
@@ -22,7 +35,8 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    println!("KERNEL PANIC: {}", info);
     loop {
         unsafe {
             asm!("hlt");

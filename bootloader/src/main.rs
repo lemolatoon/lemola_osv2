@@ -7,7 +7,6 @@ use alloc::vec::Vec;
 use alloc::{string::String, vec};
 use common::types::{GraphicsInfo, KernelMain, KernelMainArg, PixcelFormat};
 use core::arch::asm;
-use core::mem::size_of;
 use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, IntelFormatter};

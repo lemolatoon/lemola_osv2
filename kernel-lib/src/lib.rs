@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod logger;
 use core::fmt;
 
 use common::types::PixcelFormat;
