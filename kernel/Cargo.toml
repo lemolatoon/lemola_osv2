@@ -12,7 +12,7 @@ kernel-lib = { path = "../kernel-lib" }
 log = "0.4.17"
 once_cell = { version = "1.17.1", default-features = false }
 spin = "0.9.8"
-# mikanos-usb = { git = "https://github.com/lemolatoon/mikanos-usb", rev = "647c1d3" }
+mikanos-usb = { git = "https://github.com/lemolatoon/mikanos-usb", rev = "647c1d3" }
 
 [features]
 std = []

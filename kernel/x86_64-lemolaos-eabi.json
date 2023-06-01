@@ -9,7 +9,7 @@
     "executables": true,
     "exe-suffix": ".elf",
     "linker-flavor": "ld.lld",
-    "linker": "rust-lld",
+    "linker": "ld.lld",
     "panic-strategy": "abort",
     "max-atomic-width": "64",
     "pre-link-args": {

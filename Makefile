@@ -117,6 +117,19 @@ clippy:
 	cd kernel-lib && \
 	cargo clippy
 
+clean:
+	cd kernel && \
+	cargo clean
+	cd common && \
+	cargo clean
+	cd gen_font && \
+	cargo clean
+	cd bootloader && \
+	cargo clean
+	cd kernel-lib && \
+	cargo clean
+	
+
 kill:
 	killall -9 qemu-system-x86_64
 	git checkout HEAD ovmf/lemola_os_ovmf_vars.fd
