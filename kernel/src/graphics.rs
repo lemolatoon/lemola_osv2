@@ -49,9 +49,13 @@ impl PixcelWriter<Rgb> {
     pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
         let offset = offset * 4;
         unsafe {
-            *self.frame_buffer_base.add(offset) = color.r;
-            *self.frame_buffer_base.add(offset + 1) = color.g;
-            *self.frame_buffer_base.add(offset + 2) = color.b;
+            self.frame_buffer_base.add(offset).write_volatile(color.r);
+            self.frame_buffer_base
+                .add(offset + 1)
+                .write_volatile(color.g);
+            self.frame_buffer_base
+                .add(offset + 2)
+                .write_volatile(color.b);
         }
     }
 }
@@ -89,9 +93,13 @@ impl PixcelWriter<Bgr> {
     pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
         let offset = offset * 4;
         unsafe {
-            *self.frame_buffer_base.add(offset) = color.b;
-            *self.frame_buffer_base.add(offset + 1) = color.g;
-            *self.frame_buffer_base.add(offset + 2) = color.r;
+            self.frame_buffer_base.add(offset).write_volatile(color.b);
+            self.frame_buffer_base
+                .add(offset + 1)
+                .write_volatile(color.g);
+            self.frame_buffer_base
+                .add(offset + 2)
+                .write_volatile(color.r);
         }
     }
 }
