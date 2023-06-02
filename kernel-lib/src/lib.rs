@@ -46,18 +46,6 @@ pub trait PixcelInfo {
 
 pub trait PixcelWritable {
     fn write(&self, x: usize, y: usize, color: Color);
-    fn fill_rect(
-        &self,
-        (pos_x, pos_y): (usize, usize),
-        (size_x, size_y): (usize, usize),
-        color: Color,
-    ) {
-        for y in pos_y..pos_y + size_y {
-            for x in pos_x..pos_x + size_x {
-                self.write(x, y, color);
-            }
-        }
-    }
 }
 
 pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {

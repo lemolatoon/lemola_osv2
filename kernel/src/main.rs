@@ -9,15 +9,17 @@ use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
     graphics::{init_graphics, init_logger},
-    println,
+    println, serial_println,
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
+    serial_println!("Hello lemola os!!! from serial");
     let arg = unsafe { (*arg).clone() };
     let graphics_info = arg.graphics_info;
     let pixcel_writer = init_graphics(graphics_info);
+    pixcel_writer.fill_rect(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white());
     println!("global WRITER initialized?");
     writeln!(
         kernel::graphics::WRITER.0.lock().get_mut().unwrap(),
@@ -35,13 +37,14 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
 
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
-    let mut vec = Vec::new();
-    for i in 0..10 {
-        vec.push(i);
-    }
-    for i in vec {
-        println!("vec: {}", i);
-    }
+    // let devices = kernel::pci::register::scan_all_bus();
+    // devices.iter().for_each(|device| {
+    //     if device.vendor_id().is_intel() {
+    //         log::info!("device: {:#?}", device);
+    //     } else {
+    //         log::info!("not intel");
+    //     }
+    // });
     loop {
         unsafe {
             asm!("hlt");
@@ -51,6 +54,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    serial_println!("KERNEL PANIC: {}", info);
     println!("KERNEL PANIC: {}", info);
     loop {
         unsafe {

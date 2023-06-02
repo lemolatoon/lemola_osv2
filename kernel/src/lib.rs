@@ -3,3 +3,4 @@ pub mod alloc;
 pub mod font;
 pub mod graphics;
 pub mod pci;
+pub mod serial;

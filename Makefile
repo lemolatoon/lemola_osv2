@@ -35,6 +35,7 @@ run: disk.img
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
+		-serial telnet::5555,server,nowait \
 		-monitor stdio
 
 run_gdb: disk.img
@@ -42,6 +43,7 @@ run_gdb: disk.img
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
+		-serial telnet::5555,server,nowait \
 		-monitor stdio \
 		-gdb tcp::12345 -S
 # on gdb
