@@ -37,6 +37,8 @@ run: disk.img
 		-drive file=disk.img,format=raw \
 		-serial telnet::5555,server,nowait \
 		-monitor stdio
+# for serial port
+# telnet localhost 5555
 
 run_gdb: disk.img
 	qemu-system-x86_64 \

@@ -34,11 +34,19 @@ pub fn write_serial_str(string: &str) {
     }
 }
 
+static mut SERIAL_WRITER: SerialWriter = SerialWriter::new();
 struct SerialWriter(Mutex<()>);
+impl SerialWriter {
+    const fn new() -> Self {
+        SerialWriter(Mutex::new(()))
+    }
+}
 
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let lock = self.0.lock();
         write_serial_str(s);
+        drop(lock);
         Ok(())
     }
 }
@@ -46,7 +54,9 @@ impl core::fmt::Write for SerialWriter {
 #[doc(hidden)]
 pub fn _serial_print(args: core::fmt::Arguments) {
     use core::fmt::Write;
-    SerialWriter(Mutex::new(())).write_fmt(args).unwrap();
+    unsafe {
+        SERIAL_WRITER.write_fmt(args).unwrap();
+    }
 }
 
 #[macro_export]
