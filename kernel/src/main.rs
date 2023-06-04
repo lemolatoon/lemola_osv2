@@ -1,10 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 #![feature(lang_items)]
-use core::{arch::asm, panic::PanicInfo};
+use core::{arch::asm, ffi::c_void, panic::PanicInfo};
 
 pub extern crate alloc;
-use alloc::vec::Vec;
 use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
@@ -37,14 +36,35 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
 
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
-    // let devices = kernel::pci::register::scan_all_bus();
-    // devices.iter().for_each(|device| {
-    //     if device.vendor_id().is_intel() {
-    //         log::info!("device: {:#?}", device);
-    //     } else {
-    //         log::info!("not intel");
-    //     }
-    // });
+    let devices = kernel::pci::register::scan_all_bus();
+    for device in &devices {
+        let class_code = device.class_code();
+        serial_println!(
+            "{:x>02}{:x>02}{:x>02}",
+            class_code.base(),
+            class_code.sub(),
+            class_code.interface()
+        );
+    }
+    let xhci_device = devices
+        .iter()
+        .find(|pci_device| pci_device.class_code().is_xhci() && pci_device.vendor_id().is_intel())
+        .map_or_else(
+            || {
+                devices
+                    .iter()
+                    .find(|pci_device| pci_device.class_code().is_xhci())
+            },
+            |x| Some(x),
+        )
+        .expect("xhci device not found");
+    log::info!("xhci device found");
+    let xhc_bar = xhci_device.read_bar_64(0).unwrap();
+    let xhc_mmio_base = xhc_bar & 0xffff_fff0; // 下位4bitはBARのフラグ
+
+    log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
+    // let controller = mikanos_usb::ffi::new_controller(xhc_mmio_base as usize);
+
     loop {
         unsafe {
             asm!("hlt");

@@ -35,6 +35,8 @@ run: disk.img
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
+		-device nec-usb-xhci,id=xhci \
+		-device usb-mouse -device usb-kbd \
 		-serial telnet::5555,server,nowait \
 		-monitor stdio
 # for serial port
@@ -45,6 +47,8 @@ run_gdb: disk.img
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
+		-device nec-usb-xhci,id=xhci \
+		-device usb-mouse -device usb-kbd \
 		-serial telnet::5555,server,nowait \
 		-monitor stdio \
 		-gdb tcp::12345 -S

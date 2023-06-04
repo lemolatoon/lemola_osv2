@@ -15,6 +15,13 @@ impl PciConfigAddress {
         address |= (register & 0b1100) as u32;
         Self(address)
     }
+
+    pub fn new_from_bar_index(bus: u8, device: u8, function: u8, bar_index: u8) -> Option<Self> {
+        if bar_index >= 6 {
+            return None;
+        }
+        Some(Self::new(bus, device, function, 0x10 + bar_index * 4))
+    }
 }
 const CONFIG_ADDRESS: u16 = 0xcf8;
 const CONFIG_DATA: u16 = 0xcfc;
@@ -39,7 +46,7 @@ pub struct PciDevice {
 
 impl PciDevice {
     pub fn new(bus: u8, device: u8, function: u8) -> Self {
-        let raw_data = read_data(bus, device, function, 0);
+        let raw_data = read_data(PciConfigAddress::new(bus, device, function, 0));
         let vendor_id = VendorId::from_raw(raw_data);
         let device_id = DeviceId::from_raw(raw_data);
         let header_type = HeaderType::new(bus, device, function);
@@ -57,6 +64,32 @@ impl PciDevice {
 
     pub const fn is_standard_pci_pci_bridge(&self) -> bool {
         self.class_code.base() == 0x06 && self.class_code.sub() == 0x04
+    }
+
+    pub fn read_bar_32(&self, bar_index: u8) -> Option<u32> {
+        let bar = read_data(PciConfigAddress::new_from_bar_index(
+            self.bus,
+            self.device,
+            self.function,
+            bar_index,
+        )?);
+        return Some(bar);
+    }
+
+    pub fn read_bar_64(&self, bar_index: u8) -> Option<u64> {
+        let bar = read_data(PciConfigAddress::new_from_bar_index(
+            self.bus,
+            self.device,
+            self.function,
+            bar_index,
+        )?);
+        let bar_upper = read_data(PciConfigAddress::new_from_bar_index(
+            self.bus,
+            self.device,
+            self.function,
+            bar_index + 1,
+        )?);
+        return Some(bar as u64 | ((bar_upper as u64) << 32));
     }
 
     pub const fn vendor_id(&self) -> VendorId {
@@ -87,7 +120,7 @@ pub struct BusNumber(u32);
 impl BusNumber {
     // TODO: change fn by HeaderType
     pub fn new(bus: u8, device: u8, function: u8) -> Self {
-        let raw_data = read_data(bus, device, function, 0x18);
+        let raw_data = read_data(PciConfigAddress::new(bus, device, function, 0x18));
         Self(raw_data)
     }
     pub fn secondary_bus_number(&self) -> u8 {
@@ -104,7 +137,7 @@ pub struct ClassCode {
 
 impl ClassCode {
     pub fn new(bus: u8, device: u8, function: u8) -> Self {
-        let raw_data = read_data(bus, device, function, 0x08);
+        let raw_data = read_data(PciConfigAddress::new(bus, device, function, 0x08));
         Self::from_raw(raw_data)
     }
 
@@ -126,6 +159,14 @@ impl ClassCode {
     pub const fn interface(&self) -> u8 {
         self.interface
     }
+
+    pub const fn matches(&self, base: u8, sub: u8, interface: u8) -> bool {
+        self.base == base && self.sub == sub && self.interface == interface
+    }
+
+    pub const fn is_xhci(&self) -> bool {
+        self.matches(0x0c, 0x03, 0x30)
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -133,7 +174,7 @@ pub struct HeaderType(u8);
 
 impl HeaderType {
     pub fn new(bus: u8, device: u8, function: u8) -> Self {
-        let raw_data = read_data(bus, device, function, 0x0c);
+        let raw_data = read_data(PciConfigAddress::new(bus, device, function, 0x0c));
         Self::from_raw(raw_data)
     }
 
@@ -152,7 +193,7 @@ pub struct DeviceId(u16);
 
 impl DeviceId {
     pub fn new(bus: u8, device: u8, function: u8) -> Self {
-        let raw_data = read_data(bus, device, function, 0);
+        let raw_data = read_data(PciConfigAddress::new(bus, device, function, 0));
         Self::from_raw(raw_data)
     }
 
@@ -167,7 +208,7 @@ pub struct VendorId(u16);
 
 impl VendorId {
     pub fn new(bus: u8, device: u8, function: u8) -> Self {
-        let raw_data = read_data(bus, device, function, 0);
+        let raw_data = read_data(PciConfigAddress::new(bus, device, function, 0));
         Self::from_raw(raw_data)
     }
 
@@ -185,9 +226,9 @@ impl VendorId {
     }
 }
 
-pub fn read_data(bus: u8, device: u8, function: u8, register: u8) -> u32 {
+pub fn read_data(address: PciConfigAddress) -> u32 {
     unsafe {
-        write_address(PciConfigAddress::new(bus, device, function, register));
+        write_address(address);
         read_date()
     }
 }
