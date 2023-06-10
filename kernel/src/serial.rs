@@ -5,7 +5,6 @@ use spin::Mutex;
 const PORT: u16 = 0x3f8;
 
 fn is_transmit_empty() -> bool {
-    let ret: u8;
     return inb(PORT + 5) & 0x20 != 0;
 }
 
@@ -45,7 +44,13 @@ impl SerialWriter {
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let lock = self.0.lock();
-        write_serial_str(s);
+        for ch in s.chars() {
+            if ch == '\n' {
+                write_serial_str("\r\n");
+            } else {
+                write_serial_str(ch.encode_utf8(&mut [0; 4]));
+            }
+        }
         drop(lock);
         Ok(())
     }
@@ -66,6 +71,6 @@ macro_rules! serial_print {
 
 #[macro_export]
 macro_rules! serial_println {
-    () => ($crate::serial_print!("\n"));
-    ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*)));
+    () => ($crate::serial_print!("\r\n"));
+    ($($arg:tt)*) => ($crate::serial_print!("{}\r\n", format_args!($($arg)*)));
 }

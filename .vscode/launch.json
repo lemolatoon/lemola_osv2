@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "gdb(kernel:debug)",
+            "type": "cppdbg",
+            "request": "launch",
+            "miDebuggerServerAddress": "127.0.0.1:12345",
+            "program": "${workspaceRoot}/kernel/target/x86_64-lemolaos-eabi/debug/kernel.elf",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "logging": {
+                "engineLogging": true,
+            },
+            "MIMode": "gdb"
+        }
+    ]
+}

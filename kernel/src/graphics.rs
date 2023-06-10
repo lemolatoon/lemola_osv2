@@ -5,6 +5,8 @@ use kernel_lib::{logger::CharWriter, AsciiWriter, Color, PixcelInfo, PixcelWrita
 use once_cell::unsync::OnceCell;
 use spin::Mutex;
 
+use crate::serial_print;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Rgb;
 #[derive(Debug, Clone, Copy)]
@@ -216,6 +218,18 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
         writer
     });
     pixcel_writer
+}
+
+// TODO: use this for logging to make sure to log into also serial console.
+pub struct SerialAndVgaCharWriter;
+static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter {};
+impl fmt::Write for SerialAndVgaCharWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        use crate::print;
+        print!("{}", s);
+        serial_print!("{}", s);
+        Ok(())
+    }
 }
 
 pub fn init_logger() {

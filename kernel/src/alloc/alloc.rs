@@ -1,7 +1,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use spin::Mutex;
 
-const HEAP_SIZE: usize = 0x1000;
+const HEAP_SIZE: usize = 0x10000;
 struct FixedLengthAllocatorInner<const SIZE: usize> {
     heap: [u8; SIZE],
     next: usize,
@@ -27,7 +27,17 @@ unsafe impl<const SIZE: usize> GlobalAlloc for FixedLengthAllocator<SIZE> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut allocator = self.0.lock();
         let start = allocator.next;
-        let end = start + layout.size();
+        let current_ptr = allocator.heap.as_mut_ptr().add(start);
+        let aligned_ptr = if (current_ptr.add(layout.size()) as usize) % layout.align() == 0 {
+            // Aligned
+            current_ptr
+        } else {
+            // Not aligned
+            let aligned_ptr =
+                current_ptr.add(2 * layout.align() - (current_ptr as usize) % layout.align());
+            aligned_ptr
+        };
+        let end = start + aligned_ptr as usize - current_ptr as usize + layout.size();
         if end > SIZE {
             panic!("[ALLOCATOR] Out of memory");
             core::ptr::null_mut()

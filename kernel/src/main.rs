@@ -9,8 +9,10 @@ use core::fmt::Write;
 use kernel::{
     graphics::{init_graphics, init_logger},
     println, serial_println,
+    xhci::controller::XhciController,
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
+use xhci::registers::{Capability, Registers};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
@@ -29,41 +31,61 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     init_logger();
 
     log::info!("global logger initialized!");
-    for i in 0..10 {
-        println!("Hello lemola os!!! {}", i);
-    }
 
     pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
 
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
     let devices = kernel::pci::register::scan_all_bus();
     for device in &devices {
-        let class_code = device.class_code();
         serial_println!(
-            "{:x>02}{:x>02}{:x>02}",
-            class_code.base(),
-            class_code.sub(),
-            class_code.interface()
+            "vend: {}, class: {}, head: {}",
+            device.vendor_id(),
+            device.class_code(),
+            device.header_type()
         );
     }
     let xhci_device = devices
         .iter()
-        .find(|pci_device| pci_device.class_code().is_xhci() && pci_device.vendor_id().is_intel())
+        .find(|pci_device| {
+            pci_device.class_code().is_xhci_controller() && pci_device.vendor_id().is_intel()
+        })
         .map_or_else(
             || {
                 devices
                     .iter()
-                    .find(|pci_device| pci_device.class_code().is_xhci())
+                    .find(|pci_device| pci_device.class_code().is_xhci_controller())
             },
             |x| Some(x),
         )
         .expect("xhci device not found");
-    log::info!("xhci device found");
-    let xhc_bar = xhci_device.read_bar_64(0).unwrap();
-    let xhc_mmio_base = xhc_bar & 0xffff_fff0; // 下位4bitはBARのフラグ
+    log::info!(
+        "xhci device found, {:x}, {:x}, {:x}",
+        xhci_device.bus(),
+        xhci_device.device(),
+        xhci_device.function()
+    );
+    serial_println!(
+        "vend: {}, class: {}, head: {}",
+        xhci_device.vendor_id(),
+        xhci_device.class_code(),
+        xhci_device.header_type()
+    );
+    let mmio_base_raw = (xhci_device.read_configuration_space(0x10) as u64 & 0xffff_ffff_ffff_fff0)
+        | ((xhci_device.read_configuration_space(0x14) as u64) << 32);
+    log::info!("mmio_base_raw: {:x}", mmio_base_raw);
+    let xhc_bar = xhci_device.read_bar(0).unwrap();
+    let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
 
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
-    // let controller = mikanos_usb::ffi::new_controller(xhc_mmio_base as usize);
+    serial_println!(
+        "alignment of XhciRegisters: {}",
+        core::mem::align_of::<Registers<kernel::memory::MemoryMapper>>()
+    );
+    let memory_mapper = kernel::memory::MemoryMapper::new();
+    let capability = unsafe { Capability::new(xhc_mmio_base as usize, &memory_mapper) };
+    serial_println!("{:#?}", capability);
+    let controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
+    log::info!("{:?}", controller);
 
     loop {
         unsafe {
