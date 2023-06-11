@@ -7,6 +7,7 @@ use xhci::accessor::Mapper;
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
+    xhci::command_ring::CommandRing,
 };
 
 use super::device_manager::DeviceManager;
@@ -34,7 +35,9 @@ where
         let mut registers = xhci::Registers::new(xhci_memory_mapped_io_base_address, mapper);
         Self::reset_controller(&mut registers);
         let device_manager = Self::configure_device_context(&mut registers);
-        log::debug!("device_manager allocated: {:?}", &device_manager);
+        let interrupter_register_set_array = &registers.interrupter_register_set;
+        const COMMAND_RING_BUF_SIZE: usize = 32;
+        let command_ring = CommandRing::new(COMMAND_RING_BUF_SIZE);
         Self {
             registers,
             device_manager,
