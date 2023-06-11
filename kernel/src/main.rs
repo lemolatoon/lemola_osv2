@@ -70,22 +70,14 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
         xhci_device.class_code(),
         xhci_device.header_type()
     );
-    let mmio_base_raw = (xhci_device.read_configuration_space(0x10) as u64 & 0xffff_ffff_ffff_fff0)
-        | ((xhci_device.read_configuration_space(0x14) as u64) << 32);
-    log::info!("mmio_base_raw: {:x}", mmio_base_raw);
     let xhc_bar = xhci_device.read_bar(0).unwrap();
     let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
 
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
-    serial_println!(
-        "alignment of XhciRegisters: {}",
-        core::mem::align_of::<Registers<kernel::memory::MemoryMapper>>()
-    );
     let memory_mapper = kernel::memory::MemoryMapper::new();
-    let capability = unsafe { Capability::new(xhc_mmio_base as usize, &memory_mapper) };
-    serial_println!("{:#?}", capability);
-    let controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
-    log::info!("{:?}", controller);
+    let mut controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
+    controller.initialize();
+    serial_println!("xhc initialized");
 
     loop {
         unsafe {
