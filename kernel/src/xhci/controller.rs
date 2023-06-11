@@ -106,9 +106,12 @@ where
             device_manager.set_scratchpad_buffer_array(scratchpad_buffer_array);
         }
 
+        let ptr_head = device_manager.get_device_contexts_head_ptr();
+        log::debug!("DeviceContextBaseAddressArrayPointer: {0:p}", ptr_head);
         operational.dcbaap.update_volatile(|dcbaap| {
             dcbaap.set(device_manager.get_device_contexts_head_ptr() as u64)
         });
+        while operational.dcbaap.read_volatile().get() != ptr_head as u64 {}
 
         device_manager
     }
