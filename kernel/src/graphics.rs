@@ -1,7 +1,13 @@
-use core::fmt::{self};
+use core::{
+    cell::{Cell, UnsafeCell},
+    fmt::{self},
+};
 
 use common::types::{GraphicsInfo, PixcelFormat};
-use kernel_lib::{logger::CharWriter, AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer};
+use kernel_lib::{
+    logger::{CharWriter, DecoratedLog},
+    AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,
+};
 use once_cell::unsync::OnceCell;
 use spin::Mutex;
 
@@ -221,9 +227,23 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
 }
 
 // TODO: use this for logging to make sure to log into also serial console.
-pub struct SerialAndVgaCharWriter;
-static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter {};
-impl fmt::Write for SerialAndVgaCharWriter {
+pub struct SerialAndVgaCharWriterInner;
+pub struct SerialAndVgaCharWriter {
+    inner: Cell<SerialAndVgaCharWriterInner>,
+}
+impl SerialAndVgaCharWriter {
+    pub const fn new() -> Self {
+        Self {
+            inner: Cell::new(SerialAndVgaCharWriterInner),
+        }
+    }
+}
+// Safety: SerialAndVgaCharWriterInner is not actually mutable. It is just call outer `println!` and `serial_println!`.
+//         and in `println!`, `serial_println!` static variables are wrapped by `Mutex`
+unsafe impl Sync for SerialAndVgaCharWriter {}
+unsafe impl Send for SerialAndVgaCharWriter {}
+static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter::new();
+impl fmt::Write for SerialAndVgaCharWriterInner {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         use crate::print;
         print!("{}", s);
@@ -231,9 +251,30 @@ impl fmt::Write for SerialAndVgaCharWriter {
         Ok(())
     }
 }
+impl log::Log for SerialAndVgaCharWriter {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        WRITER.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let writer = self.inner.as_ptr();
+            DecoratedLog::write(
+                unsafe { writer.as_mut().unwrap_unchecked() },
+                record.level(),
+                record.args(),
+                record.file().unwrap_or("<unknown>"),
+                record.line().unwrap_or(0),
+            )
+            .unwrap();
+        }
+    }
+
+    fn flush(&self) {}
+}
 
 pub fn init_logger() {
-    log::set_logger(&WRITER)
+    log::set_logger(&SERIAL_VGA_WRITER)
         .map(|()| {
             log::set_max_level(log::LevelFilter::Trace);
             log::info!("logger initialized");
