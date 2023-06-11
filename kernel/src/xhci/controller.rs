@@ -38,6 +38,8 @@ where
         let interrupter_register_set_array = &registers.interrupter_register_set;
         const COMMAND_RING_BUF_SIZE: usize = 32;
         let command_ring = CommandRing::new(COMMAND_RING_BUF_SIZE);
+        Self::register_command_ring(&mut registers, &command_ring);
+        log::debug!("{:?}", &registers.operational.crcr.read_volatile());
         Self {
             registers,
             device_manager,
@@ -116,5 +118,11 @@ where
         while operational.dcbaap.read_volatile().get() != ptr_head as u64 {}
 
         device_manager
+    }
+
+    fn register_command_ring(registers: &mut xhci::Registers<M>, ring: &CommandRing) {
+        let command_ring_controller_register = &mut registers.operational.crcr.read_volatile();
+        command_ring_controller_register.clear_ring_cycle_state();
+        command_ring_controller_register.set_command_ring_pointer(ring.buffer_ptr() as u64);
     }
 }

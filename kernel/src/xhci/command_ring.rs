@@ -38,4 +38,8 @@ impl CommandRing {
             cycle_bit,
         }
     }
+
+    pub fn buffer_ptr(&self) -> *const command::Allowed {
+        self.trb_buffer.as_ptr()
+    }
 }
