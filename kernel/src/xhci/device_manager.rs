@@ -40,6 +40,8 @@ impl DeviceContextArray {
     pub fn new(max_slots: u8) -> Self {
         let device_contexts_len = max_slots as usize + 1;
         const ALIGNMENT: usize = 64;
+        // allow this because xhci specification says we shall initialized with 0
+        #[allow(clippy::zero_ptr)]
         let device_contexts = alloc_array_with_boundary_with_default_else(
             device_contexts_len,
             ALIGNMENT,

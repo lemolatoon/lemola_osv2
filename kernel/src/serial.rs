@@ -5,7 +5,7 @@ use spin::Mutex;
 const PORT: u16 = 0x3f8;
 
 fn is_transmit_empty() -> bool {
-    return inb(PORT + 5) & 0x20 != 0;
+    inb(PORT + 5) & 0x20 != 0
 }
 
 fn inb(port: u16) -> u8 {
@@ -13,7 +13,7 @@ fn inb(port: u16) -> u8 {
     unsafe {
         asm!("in al, dx", out("al") ret, in("dx") port, options(nomem, nostack));
     };
-    return ret;
+    ret
 }
 
 fn outb(port: u16, data: u8) {

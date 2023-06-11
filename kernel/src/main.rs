@@ -12,7 +12,6 @@ use kernel::{
     xhci::controller::XhciController,
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
-use xhci::registers::{Capability, Registers};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
@@ -55,7 +54,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
                     .iter()
                     .find(|pci_device| pci_device.class_code().is_xhci_controller())
             },
-            |x| Some(x),
+            Some,
         )
         .expect("xhci device not found");
     log::info!(

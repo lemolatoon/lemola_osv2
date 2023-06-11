@@ -1,5 +1,5 @@
 use core::{
-    cell::{Cell, UnsafeCell},
+    cell::Cell,
     fmt::{self},
 };
 

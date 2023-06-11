@@ -12,7 +12,7 @@ impl PciConfigAddress {
         address |= (bus as u32) << 16;
         address |= (device as u32) << 11;
         address |= (function as u32) << 8;
-        address |= (register & 0b111_11100) as u32;
+        address |= (register & 0b1111_1100) as u32;
         Self(address)
     }
 
@@ -95,7 +95,7 @@ impl PciDevice {
         log::info!("memory space indicator: {}", bar & 0b1);
         log::info!("type: {}", (bar >> 1) & 0b11);
         log::info!("prefetchable: {}", (bar >> 3) & 0b1);
-        log::info!("base address: {:x}", (bar >> 4) & 0xffff_ffff);
+        log::info!("base address: {:x}", bar >> 4);
         if (bar >> 1) & 0b11 == 0 {
             // 32bit address
             return Some(bar as u64);
@@ -106,7 +106,7 @@ impl PciDevice {
             self.function,
             bar_index + 1,
         )?);
-        return Some(bar as u64 | ((bar_upper as u64) << 32));
+        Some(bar as u64 | ((bar_upper as u64) << 32))
     }
 
     /// read 32bit data from PCI config space
@@ -325,7 +325,7 @@ pub fn scan_all_bus() -> Vec<PciDevice> {
         scan_bus(function, &mut devices);
     }
 
-    return devices;
+    devices
 }
 
 pub fn scan_bus(bus: u8, devices: &mut Vec<PciDevice>) {

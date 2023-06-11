@@ -35,11 +35,10 @@ where
         Self::reset_controller(&mut registers);
         let device_manager = Self::configure_device_context(&mut registers);
         log::debug!("device_manager allocated: {:?}", &device_manager);
-        let controller = Self {
+        Self {
             registers,
             device_manager,
-        };
-        controller
+        }
     }
 
     fn reset_controller(registers: &mut xhci::Registers<M>) {

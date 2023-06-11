@@ -49,6 +49,7 @@ unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
         if end > SIZE {
             log::debug!("layout: {:?}", layout);
             panic!("[ALLOCATOR] Out of memory");
+            #[allow(unreachable_code)]
             core::ptr::null_mut()
         } else {
             allocator.next = end;
@@ -130,7 +131,7 @@ pub fn alloc_array_with_boundary_with_default_else<T>(
         unsafe { val.as_mut_ptr().write(default()) };
     }
     // Safety: slice is initialized
-    Ok(unsafe { Box::from_raw(core::mem::transmute(slice)) })
+    Ok(unsafe { Box::from_raw(slice as *mut [core::mem::MaybeUninit<T>] as *mut [T]) })
 }
 
 #[global_allocator]

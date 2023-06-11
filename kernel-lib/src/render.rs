@@ -34,7 +34,7 @@ pub trait Renderer: PixcelWritable {
     fn fill_shape(&self, pos: Vector2D, shape: &dyn Shape) {
         for y in 0..shape.get_height() {
             for x in 0..shape.get_width() {
-                self.write(pos.x + x, pos.y + y, shape.get_pixel(x, y).into());
+                self.write(pos.x + x, pos.y + y, shape.get_pixel(x, y));
             }
         }
     }
