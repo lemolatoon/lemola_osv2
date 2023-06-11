@@ -1,4 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![feature(ptr_alignment_type)]
+#![feature(const_option)]
 pub mod alloc;
 pub mod font;
 pub mod graphics;

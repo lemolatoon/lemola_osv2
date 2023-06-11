@@ -76,7 +76,6 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
     let memory_mapper = kernel::memory::MemoryMapper::new();
     let mut controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
-    controller.initialize();
     serial_println!("xhc initialized");
 
     loop {
