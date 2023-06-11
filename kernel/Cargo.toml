@@ -13,8 +13,6 @@ log = "0.4.17"
 once_cell = { version = "1.17.1", default-features = false }
 spin = "0.9.8"
 xhci = "0.9.1"
-# link-cplusplus = {version = "1.0.8", features = ["nothing"]}
-# mikanos-usb = { git = "https://github.com/lemolatoon/mikanos-usb", rev = "f5cb636" }
 
 [features]
 std = []

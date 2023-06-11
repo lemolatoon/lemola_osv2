@@ -1,8 +1,13 @@
 use core::cmp;
 
 extern crate alloc;
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use xhci::accessor::Mapper;
+
+use crate::{
+    alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
+    memory::PAGE_SIZE,
+};
 
 use super::device_manager::DeviceManager;
 
@@ -72,7 +77,38 @@ where
             config.set_max_device_slots_enabled(max_device_slots_enabled);
         });
         log::debug!("max_device_slots_enabled: {}", max_device_slots_enabled);
-        let device_manager = DeviceManager::new(max_slots);
+        let mut device_manager = DeviceManager::new(max_slots);
+
+        // Allocate scratchpad_buffers on first pointer of DeviceContextArray
+        let hcsparams2 = registers.capability.hcsparams2.read_volatile();
+        let max_scratchpad_buffers = hcsparams2.max_scratchpad_buffers();
+        if max_scratchpad_buffers > 0 {
+            const ALIGNMENT: usize = 64;
+            let mut scratchpad_buffer_array = alloc_array_with_boundary::<*mut [u8; PAGE_SIZE]>(
+                max_scratchpad_buffers as usize,
+                ALIGNMENT,
+                PAGE_SIZE,
+            )
+            .expect("scratchpad buffer array allocation failed");
+            for scratchpad_buffer in scratchpad_buffer_array.iter_mut() {
+                let mut allocated_array =
+                    alloc_with_boundary::<[u8; PAGE_SIZE]>(PAGE_SIZE, PAGE_SIZE).unwrap();
+                unsafe { allocated_array.as_mut_ptr().write([0; PAGE_SIZE]) };
+                let allocated_array = unsafe { allocated_array.assume_init() };
+                unsafe {
+                    scratchpad_buffer
+                        .as_mut_ptr()
+                        .write(Box::leak(allocated_array) as *mut _)
+                };
+            }
+
+            let scratchpad_buffer_array = unsafe { scratchpad_buffer_array.assume_init() };
+            device_manager.set_scratchpad_buffer_array(scratchpad_buffer_array);
+        }
+
+        operational.dcbaap.update_volatile(|dcbaap| {
+            dcbaap.set(device_manager.get_device_contexts_head_ptr() as u64)
+        });
 
         device_manager
     }

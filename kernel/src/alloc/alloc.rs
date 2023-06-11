@@ -1,4 +1,9 @@
-use core::alloc::{GlobalAlloc, Layout};
+extern crate alloc;
+use alloc::boxed::Box;
+use core::{
+    alloc::{GlobalAlloc, Layout, LayoutError},
+    mem::MaybeUninit,
+};
 use spin::Mutex;
 
 const HEAP_SIZE: usize = 1 << 20;
@@ -51,7 +56,7 @@ unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
         }
     }
 
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout, _boundary: usize) {
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         // Do nothing
     }
 }
@@ -59,7 +64,7 @@ unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
 pub unsafe trait BoundaryAlloc {
     unsafe fn alloc(&self, layout: Layout, boundary: usize) -> *mut u8;
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout, boundary: usize);
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout);
 }
 
 unsafe impl<const SIZE: usize> GlobalAlloc for FixedLengthAllocator<SIZE> {
@@ -68,16 +73,64 @@ unsafe impl<const SIZE: usize> GlobalAlloc for FixedLengthAllocator<SIZE> {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        BoundaryAlloc::dealloc(self, ptr, layout, 0);
+        BoundaryAlloc::dealloc(self, ptr, layout);
     }
 }
 
-pub fn alloc_with_boundary(layout: Layout, boundary: usize) -> *mut u8 {
+pub fn alloc_with_boundary_raw(layout: Layout, boundary: usize) -> *mut u8 {
     unsafe { BoundaryAlloc::alloc(&ALLOCATOR, layout, boundary) }
 }
 
-pub fn dealloc_with_boundary(ptr: *mut u8, layout: Layout, boundary: usize) {
-    unsafe { BoundaryAlloc::dealloc(&ALLOCATOR, ptr, layout, boundary) }
+pub fn alloc_with_boundary<T>(
+    alignment: usize,
+    boundary: usize,
+) -> Result<Box<MaybeUninit<T>>, LayoutError> {
+    let layout = Layout::from_size_align(core::mem::size_of::<T>(), alignment)?;
+    let ptr = alloc_with_boundary_raw(layout, boundary) as *mut MaybeUninit<T>;
+    debug_assert!(!ptr.is_null());
+    Ok(unsafe { Box::from_raw(ptr) })
+}
+
+pub fn alloc_with_boundary_with_default_else<T>(
+    alignment: usize,
+    boundary: usize,
+    default: impl FnOnce() -> T,
+) -> Result<Box<T>, LayoutError> {
+    let mut allocated = alloc_with_boundary::<T>(alignment, boundary)?;
+    let ptr = allocated.as_mut_ptr();
+    unsafe { ptr.write(default()) };
+    Ok(unsafe { allocated.assume_init() })
+}
+
+pub fn alloc_array_with_boundary<T>(
+    len: usize,
+    alignment: usize,
+    boundary: usize,
+) -> Result<Box<[MaybeUninit<T>]>, LayoutError> {
+    let size = len * core::mem::size_of::<*mut T>();
+    let layout = Layout::from_size_align(size, alignment)?;
+    let array_pointer = alloc_with_boundary_raw(layout, boundary) as *mut MaybeUninit<T>;
+    debug_assert!(!array_pointer.is_null());
+    let slice = unsafe { core::slice::from_raw_parts_mut(array_pointer, len) };
+    Ok(unsafe { Box::from_raw(slice) })
+}
+
+pub fn alloc_array_with_boundary_with_default_else<T>(
+    len: usize,
+    alignment: usize,
+    boundary: usize,
+    default: impl Fn() -> T,
+) -> Result<Box<[T]>, LayoutError> {
+    let size = len * core::mem::size_of::<*mut T>();
+    let layout = Layout::from_size_align(size, alignment)?;
+    let array_pointer = alloc_with_boundary_raw(layout, boundary) as *mut MaybeUninit<T>;
+    debug_assert!(!array_pointer.is_null());
+    let slice = unsafe { core::slice::from_raw_parts_mut(array_pointer, len) };
+    for val in slice.iter_mut() {
+        unsafe { val.as_mut_ptr().write(default()) };
+    }
+    // Safety: slice is initialized
+    Ok(unsafe { Box::from_raw(core::mem::transmute(slice)) })
 }
 
 #[global_allocator]
