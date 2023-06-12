@@ -1,9 +1,6 @@
 extern crate alloc;
 use alloc::boxed::Box;
-use alloc::vec;
-use alloc::vec::Vec;
 use xhci::ring::trb::command;
-use xhci::ring::trb::Type;
 
 use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
 use crate::memory::PAGE_SIZE;

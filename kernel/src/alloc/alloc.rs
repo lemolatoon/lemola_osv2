@@ -62,9 +62,19 @@ unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
     }
 }
 
+/// # Safety
+/// Type impls this trait must properly allocate or deallocate memory
 pub unsafe trait BoundaryAlloc {
+    /// This Safety clause is brought from GlobalAlloc
+    /// # Safety
+    /// This function is unsafe because undefined behavior can result if the caller does not ensure that layout has non-zero size.
     unsafe fn alloc(&self, layout: Layout, boundary: usize) -> *mut u8;
 
+    /// This Safety clause is brought from GlobalAlloc
+    /// # Safety
+    /// This function is unsafe because undefined behavior can result if the caller does not ensure all of the following:
+    /// - ptr must denote a block of memory currently allocated via this allocator,
+    /// - layout must be the same layout that was used to allocate that block of memory.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout);
 }
 
