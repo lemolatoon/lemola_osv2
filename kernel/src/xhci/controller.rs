@@ -2,7 +2,10 @@ use core::cmp;
 
 extern crate alloc;
 use alloc::boxed::Box;
-use xhci::accessor::Mapper;
+use xhci::{
+    accessor::{array, Mapper},
+    registers::PortRegisterSet,
+};
 
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
@@ -10,7 +13,10 @@ use crate::{
     xhci::{command_ring::CommandRing, event_ring::EventRing},
 };
 
-use super::device_manager::DeviceManager;
+use super::{
+    device_manager::DeviceManager,
+    port::{PortConfigPhase, PortConfigureState},
+};
 
 #[derive(Debug)]
 pub struct XhciController<M>
@@ -21,6 +27,8 @@ where
     device_manager: DeviceManager,
     command_ring: CommandRing,
     event_ring: EventRing,
+    number_of_ports: u8,
+    port_configure_state: PortConfigureState,
 }
 
 impl<M> XhciController<M>
@@ -35,6 +43,11 @@ where
     ///
     pub unsafe fn new(xhci_memory_mapped_io_base_address: usize, mapper: M) -> Self {
         let mut registers = xhci::Registers::new(xhci_memory_mapped_io_base_address, mapper);
+        let number_of_ports = registers
+            .capability
+            .hcsparams1
+            .read_volatile()
+            .number_of_ports();
         Self::reset_controller(&mut registers);
         log::debug!("[XHCI] reset controller");
         let device_manager = Self::configure_device_context(&mut registers);
@@ -50,11 +63,15 @@ where
         let event_ring = EventRing::new(EVENT_RING_BUF_SIZE, &mut primary_interrupter);
         log::debug!("[XHCI] initialize event ring");
 
+        let port_configure_state = PortConfigureState::new();
+
         Self {
             registers,
             device_manager,
             command_ring,
             event_ring,
+            number_of_ports,
+            port_configure_state,
         }
     }
 
@@ -66,6 +83,67 @@ where
 
         while operational.usbsts.read_volatile().hc_halted() {}
         log::debug!("[XHCI] xhc controller starts running!!");
+    }
+
+    pub fn port_register_sets(&mut self) -> &mut array::ReadWrite<PortRegisterSet, M> {
+        &mut self.registers.port_register_set
+    }
+
+    pub fn number_of_ports(&self) -> u8 {
+        self.number_of_ports
+    }
+
+    pub fn configure_port_at(&mut self, port_index: usize) {
+        if !self.port_configure_state.is_connected(port_index) {
+            self.reset_port_at(port_index);
+        }
+    }
+
+    pub fn reset_port_at(&mut self, port_index: usize) {
+        let is_connected = self.is_port_connected_at(port_index);
+        if !is_connected {
+            return;
+        }
+
+        match self.port_configure_state.addressing_port_index {
+            Some(_) => {
+                // This branch is fallen, when another port is currently trying to be configured
+                self.port_configure_state.port_config_phase[port_index] =
+                    PortConfigPhase::WaitingAddressed;
+            }
+            None => {
+                let port_phase = self.port_configure_state.port_phase_at(port_index);
+                if !matches!(
+                    port_phase,
+                    PortConfigPhase::NotConnected | PortConfigPhase::WaitingAddressed
+                ) {
+                    panic!("INVALID PortConfigPhase state.");
+                }
+
+                self.port_configure_state.start_configuration_at(port_index);
+                self.port_register_sets()
+                    .update_volatile_at(port_index, |port| {
+                        // actual reset operation of port
+                        port.portsc.clear_connect_status_change();
+                        port.portsc.set_port_reset();
+                    });
+                while self
+                    .port_register_sets()
+                    .read_volatile_at(port_index)
+                    .portsc
+                    .port_reset()
+                {}
+                log::debug!("[XHCI] port at {} is now reset!", port_index);
+            }
+        }
+    }
+
+    pub fn is_port_connected_at(&self, port_index: usize) -> bool {
+        self.registers
+            .port_register_set
+            .read_volatile_at(port_index)
+            .portsc
+            .current_connect_status()
     }
 
     fn reset_controller(registers: &mut xhci::Registers<M>) {
