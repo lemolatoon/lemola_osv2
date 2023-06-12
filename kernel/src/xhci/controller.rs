@@ -19,6 +19,8 @@ where
 {
     registers: xhci::Registers<M>,
     device_manager: DeviceManager,
+    command_ring: CommandRing,
+    event_ring: EventRing,
 }
 
 impl<M> XhciController<M>
@@ -51,7 +53,19 @@ where
         Self {
             registers,
             device_manager,
+            command_ring,
+            event_ring,
         }
+    }
+
+    pub fn run(&mut self) {
+        let operational = &mut self.registers.operational;
+        operational.usbcmd.update_volatile(|usbcmd| {
+            usbcmd.set_run_stop();
+        });
+
+        while operational.usbsts.read_volatile().hc_halted() {}
+        log::debug!("[XHCI] xhc controller starts running!!");
     }
 
     fn reset_controller(registers: &mut xhci::Registers<M>) {

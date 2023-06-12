@@ -5,6 +5,7 @@ use xhci::ring::trb::command;
 use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
 use crate::memory::PAGE_SIZE;
 
+#[derive(Debug)]
 pub struct CommandRing {
     trb_buffer: Box<[command::Allowed]>,
     write_index: usize,
@@ -14,10 +15,6 @@ pub struct CommandRing {
 impl CommandRing {
     pub fn new(buf_size: usize) -> Self {
         let default = || -> command::Allowed { unsafe { core::mem::transmute([0u32; 5]) } };
-        log::debug!("Command Ring init value Allowed: {:?}", default());
-        log::debug!("Command Ring init value Allowed: {:?}", unsafe {
-            core::mem::transmute::<_, [u8; 20]>(default())
-        });
         const ALIGNMENT: usize = 64;
         const BOUNDARY: usize = 64 * PAGE_SIZE;
         let trb_buffer =
