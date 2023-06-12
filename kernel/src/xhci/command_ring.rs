@@ -16,11 +16,7 @@ pub struct CommandRing {
 
 impl CommandRing {
     pub fn new(buf_size: usize) -> Self {
-        let default = || {
-            let mut allowed = command::Allowed::Noop(command::Noop::new());
-            allowed.clear_cycle_bit();
-            allowed
-        };
+        let default = || -> command::Allowed { unsafe { core::mem::transmute([0u32; 5]) } };
         log::debug!("Command Ring init value Allowed: {:?}", default());
         log::debug!("Command Ring init value Allowed: {:?}", unsafe {
             core::mem::transmute::<_, [u8; 20]>(default())

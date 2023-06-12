@@ -7,7 +7,7 @@ use xhci::accessor::Mapper;
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
-    xhci::command_ring::CommandRing,
+    xhci::{command_ring::CommandRing, event_ring::EventRing},
 };
 
 use super::device_manager::DeviceManager;
@@ -34,12 +34,20 @@ where
     pub unsafe fn new(xhci_memory_mapped_io_base_address: usize, mapper: M) -> Self {
         let mut registers = xhci::Registers::new(xhci_memory_mapped_io_base_address, mapper);
         Self::reset_controller(&mut registers);
+        log::debug!("[XHCI] reset controller");
         let device_manager = Self::configure_device_context(&mut registers);
-        let interrupter_register_set_array = &registers.interrupter_register_set;
+        log::debug!("[XHCI] configure device context");
+
         const COMMAND_RING_BUF_SIZE: usize = 32;
         let command_ring = CommandRing::new(COMMAND_RING_BUF_SIZE);
         Self::register_command_ring(&mut registers, &command_ring);
-        log::debug!("{:?}", &registers.operational.crcr.read_volatile());
+        log::debug!("[XHCI] register command ring");
+
+        const EVENT_RING_BUF_SIZE: u16 = 32;
+        let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
+        let event_ring = EventRing::new(EVENT_RING_BUF_SIZE, &mut primary_interrupter);
+        log::debug!("[XHCI] initialize event ring");
+
         Self {
             registers,
             device_manager,
