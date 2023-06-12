@@ -103,7 +103,7 @@ where
             config.set_max_device_slots_enabled(max_device_slots_enabled);
         });
         log::debug!("max_device_slots_enabled: {}", max_device_slots_enabled);
-        let mut device_manager = DeviceManager::new(max_slots);
+        let mut device_manager = DeviceManager::new(max_device_slots_enabled);
 
         // Allocate scratchpad_buffers on first pointer of DeviceContextArray
         let hcsparams2 = registers.capability.hcsparams2.read_volatile();
