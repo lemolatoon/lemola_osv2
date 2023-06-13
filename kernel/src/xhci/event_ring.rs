@@ -91,4 +91,32 @@ impl EventRing {
             cycle_bit,
         }
     }
+
+    pub fn cycle_bit(&self) -> bool {
+        self.cycle_bit
+    }
+
+    pub fn pop<M: Mapper + Clone>(&mut self, interrupter: &mut Interrupter<'_, M, ReadWrite>) {
+        let dequeue_pointer = interrupter
+            .erdp
+            .read_volatile()
+            .event_ring_dequeue_pointer() as *mut event::Allowed;
+        let mut next = unsafe { dequeue_pointer.add(1) };
+        let segment_begin = self
+            .event_ring_segment_table_entry
+            .ring_segment_base_address() as *mut event::Allowed;
+
+        let segment_end = unsafe {
+            segment_begin.add(self.event_ring_segment_table_entry.ring_segment_size() as usize)
+        };
+
+        if next == segment_end {
+            next = segment_begin;
+            self.cycle_bit = !self.cycle_bit;
+        }
+
+        interrupter.erstba.update_volatile(|erstba| {
+            erstba.set(next as u64);
+        });
+    }
 }

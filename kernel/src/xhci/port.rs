@@ -28,6 +28,12 @@ impl PortConfigureState {
     }
 }
 
+impl Default for PortConfigureState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PortConfigPhase {
     NotConnected,

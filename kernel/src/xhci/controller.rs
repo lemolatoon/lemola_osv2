@@ -5,6 +5,7 @@ use alloc::boxed::Box;
 use xhci::{
     accessor::{array, Mapper},
     registers::PortRegisterSet,
+    ring::trb::event,
 };
 
 use crate::{
@@ -83,6 +84,41 @@ where
 
         while operational.usbsts.read_volatile().hc_halted() {}
         log::debug!("[XHCI] xhc controller starts running!!");
+    }
+
+    pub fn process_event(&mut self) {
+        let primary_interrupter = self.registers.interrupter_register_set.interrupter_mut(0);
+        let event_ring_trb = unsafe {
+            (primary_interrupter
+                .erdp
+                .read_volatile()
+                .event_ring_dequeue_pointer() as *const event::Allowed)
+                .read_volatile()
+        };
+        if event_ring_trb.cycle_bit() != self.event_ring.cycle_bit() {
+            // EventRing does not have front
+            return;
+        }
+
+        log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
+        match event_ring_trb {
+            event::Allowed::TransferEvent(_) => {
+                log::warn!("Not implemented!");
+            }
+            event::Allowed::CommandCompletion(_) => {
+                log::warn!("Not implemented!");
+            }
+            event::Allowed::PortStatusChange(_) => {
+                log::warn!("Not implemented!");
+            }
+            event::Allowed::BandwidthRequest(_) => todo!(),
+            event::Allowed::Doorbell(_) => todo!(),
+            event::Allowed::HostController(_) => todo!(),
+            event::Allowed::DeviceNotification(_) => todo!(),
+            event::Allowed::MfindexWrap(_) => todo!(),
+        }
+        let mut primary_interrupter = self.registers.interrupter_register_set.interrupter_mut(0);
+        self.event_ring.pop(&mut primary_interrupter);
     }
 
     pub fn port_register_sets(&mut self) -> &mut array::ReadWrite<PortRegisterSet, M> {

@@ -92,6 +92,10 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     log::debug!("Configured ports");
 
     loop {
+        controller.process_event();
+    }
+
+    loop {
         unsafe {
             asm!("hlt");
         }
