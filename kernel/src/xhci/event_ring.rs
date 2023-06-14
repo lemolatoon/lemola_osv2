@@ -4,7 +4,7 @@ use bit_field::BitField;
 use xhci::{
     accessor::{marker::ReadWrite, Mapper},
     registers::runtime::Interrupter,
-    ring::trb::event,
+    ring::trb,
 };
 
 use crate::{alloc::alloc::alloc_array_with_boundary_with_default_else, memory::PAGE_SIZE};
@@ -44,7 +44,7 @@ impl EventRingSegmentTableEntry {
 
 #[derive(Debug)]
 pub struct EventRing {
-    trb_buffer: Box<[event::Allowed]>,
+    trb_buffer: Box<[trb::Link]>,
     event_ring_segment_table_entry: EventRingSegmentTableEntry,
     cycle_bit: bool,
 }
@@ -57,7 +57,11 @@ impl EventRing {
         let cycle_bit = true;
         const ALIGNMENT: usize = 64;
         const BOUNDARY: usize = 64 * PAGE_SIZE;
-        let default = || -> event::Allowed { unsafe { core::mem::transmute([0u32; 5]) } };
+        let default = || -> trb::Link {
+            let mut trb = trb::Link::new();
+            trb.clear_cycle_bit();
+            trb
+        };
         let trb_buffer = alloc_array_with_boundary_with_default_else(
             buf_size as usize,
             ALIGNMENT,
@@ -100,11 +104,11 @@ impl EventRing {
         let dequeue_pointer = interrupter
             .erdp
             .read_volatile()
-            .event_ring_dequeue_pointer() as *mut event::Allowed;
+            .event_ring_dequeue_pointer() as *mut trb::Link;
         let mut next = unsafe { dequeue_pointer.add(1) };
         let segment_begin = self
             .event_ring_segment_table_entry
-            .ring_segment_base_address() as *mut event::Allowed;
+            .ring_segment_base_address() as *mut trb::Link;
 
         let segment_end = unsafe {
             segment_begin.add(self.event_ring_segment_table_entry.ring_segment_size() as usize)

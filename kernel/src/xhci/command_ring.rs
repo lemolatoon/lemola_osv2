@@ -1,20 +1,24 @@
 extern crate alloc;
 use alloc::boxed::Box;
-use xhci::ring::trb::command;
+use xhci::ring::trb;
 
 use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
 use crate::memory::PAGE_SIZE;
 
 #[derive(Debug)]
 pub struct CommandRing {
-    trb_buffer: Box<[command::Allowed]>,
+    trb_buffer: Box<[trb::Link]>,
     write_index: usize,
     cycle_bit: bool,
 }
 
 impl CommandRing {
     pub fn new(buf_size: usize) -> Self {
-        let default = || -> command::Allowed { unsafe { core::mem::transmute([0u32; 5]) } };
+        let default = || -> trb::Link {
+            let mut trb = trb::Link::new();
+            trb.clear_cycle_bit();
+            trb
+        };
         const ALIGNMENT: usize = 64;
         const BOUNDARY: usize = 64 * PAGE_SIZE;
         let trb_buffer =
@@ -29,7 +33,7 @@ impl CommandRing {
         }
     }
 
-    pub fn buffer_ptr(&self) -> *const command::Allowed {
+    pub fn buffer_ptr(&self) -> *const trb::Link {
         self.trb_buffer.as_ptr()
     }
 }

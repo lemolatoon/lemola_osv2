@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use xhci::{
     accessor::{array, Mapper},
     registers::PortRegisterSet,
-    ring::trb::event,
+    ring::trb::{self, event},
 };
 
 use crate::{
@@ -49,6 +49,12 @@ where
             .hcsparams1
             .read_volatile()
             .number_of_ports();
+        // TODO: この操作の意味を調べる
+        registers.operational.usbcmd.update_volatile(|usbcmd| {
+            usbcmd.clear_interrupter_enable();
+            usbcmd.clear_host_system_error_enable();
+            usbcmd.clear_enable_wrap_event();
+        });
         Self::reset_controller(&mut registers);
         log::debug!("[XHCI] reset controller");
         let device_manager = Self::configure_device_context(&mut registers);
@@ -92,7 +98,7 @@ where
             (primary_interrupter
                 .erdp
                 .read_volatile()
-                .event_ring_dequeue_pointer() as *const event::Allowed)
+                .event_ring_dequeue_pointer() as *const trb::Link)
                 .read_volatile()
         };
         if event_ring_trb.cycle_bit() != self.event_ring.cycle_bit() {
@@ -101,22 +107,6 @@ where
         }
 
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
-        match event_ring_trb {
-            event::Allowed::TransferEvent(_) => {
-                log::warn!("Not implemented!");
-            }
-            event::Allowed::CommandCompletion(_) => {
-                log::warn!("Not implemented!");
-            }
-            event::Allowed::PortStatusChange(_) => {
-                log::warn!("Not implemented!");
-            }
-            event::Allowed::BandwidthRequest(_) => todo!(),
-            event::Allowed::Doorbell(_) => todo!(),
-            event::Allowed::HostController(_) => todo!(),
-            event::Allowed::DeviceNotification(_) => todo!(),
-            event::Allowed::MfindexWrap(_) => todo!(),
-        }
         let mut primary_interrupter = self.registers.interrupter_register_set.interrupter_mut(0);
         self.event_ring.pop(&mut primary_interrupter);
     }
