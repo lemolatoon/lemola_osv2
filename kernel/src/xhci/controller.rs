@@ -4,8 +4,10 @@ extern crate alloc;
 use alloc::boxed::Box;
 use xhci::{
     accessor::{array, Mapper},
+    extended_capabilities::{self, usb_legacy_support_capability},
     registers::PortRegisterSet,
     ring::trb::{self, event},
+    ExtendedCapability,
 };
 
 use crate::{
@@ -43,7 +45,38 @@ where
     /// This method panics if `mmio_base` is not aligned correctly.
     ///
     pub unsafe fn new(xhci_memory_mapped_io_base_address: usize, mapper: M) -> Self {
-        let mut registers = xhci::Registers::new(xhci_memory_mapped_io_base_address, mapper);
+        let mut registers =
+            xhci::Registers::new(xhci_memory_mapped_io_base_address, mapper.clone());
+        let hccparam1 = registers.capability.hccparams1.read_volatile();
+        let extended_capabilities_list = unsafe {
+            extended_capabilities::List::new(xhci_memory_mapped_io_base_address, hccparam1, mapper)
+        };
+        if let Some(mut extended_capabilities_list) = extended_capabilities_list {
+            for extended_capability in extended_capabilities_list.into_iter() {
+                match extended_capability {
+                    Err(_) => continue,
+                    Ok(extended_capability) => match extended_capability {
+                        ExtendedCapability::UsbLegacySupport(mut usb_legacy_support) => {
+                            Self::request_hc_ownership(&mut usb_legacy_support)
+                        }
+                        ExtendedCapability::XhciSupportedProtocol(_) => {
+                            log::debug!("xhci supported protocol")
+                        }
+                        ExtendedCapability::HciExtendedPowerManagementCapability(_) => {
+                            log::debug!("hci extended power management capability")
+                        }
+                        ExtendedCapability::XhciMessageInterrupt(_) => {
+                            log::debug!("xhci message interrupt")
+                        }
+                        ExtendedCapability::XhciLocalMemory(_) => log::debug!("xhci local memory"),
+                        ExtendedCapability::Debug(_) => log::debug!("debug"),
+                        ExtendedCapability::XhciExtendedMessageInterrupt(_) => {
+                            log::debug!("xhci extended message interrupt")
+                        }
+                    },
+                }
+            }
+        }
         let number_of_ports = registers
             .capability
             .hcsparams1
@@ -250,5 +283,33 @@ where
         let command_ring_controller_register = &mut registers.operational.crcr.read_volatile();
         command_ring_controller_register.clear_ring_cycle_state();
         command_ring_controller_register.set_command_ring_pointer(ring.buffer_ptr() as u64);
+    }
+
+    fn request_hc_ownership(
+        usb_legacy_support: &mut usb_legacy_support_capability::UsbLegacySupport<M>,
+    ) {
+        if usb_legacy_support
+            .usblegsup
+            .read_volatile()
+            .hc_os_owned_semaphore()
+        {
+            log::debug!("already os owned ownership");
+            return;
+        }
+
+        usb_legacy_support
+            .usblegsup
+            .update_volatile(|usb_legacy_support_reg| {
+                usb_legacy_support_reg.set_hc_os_owned_semaphore();
+            });
+
+        log::debug!("wating until OS has owned xHC...");
+        let mut usb_legacy_support_reg = usb_legacy_support.usblegsup.read_volatile();
+        while usb_legacy_support_reg.hc_bios_owned_semaphore()
+            || !usb_legacy_support_reg.hc_os_owned_semaphore()
+        {
+            usb_legacy_support_reg = usb_legacy_support.usblegsup.read_volatile();
+        }
+        log::debug!("OS has owned xHC!!");
     }
 }

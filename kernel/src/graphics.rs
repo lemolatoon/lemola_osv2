@@ -226,7 +226,6 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
     pixcel_writer
 }
 
-// TODO: use this for logging to make sure to log into also serial console.
 pub struct SerialAndVgaCharWriterInner;
 pub struct SerialAndVgaCharWriter {
     inner: Cell<SerialAndVgaCharWriterInner>,
