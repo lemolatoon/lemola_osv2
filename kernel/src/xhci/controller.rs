@@ -206,17 +206,16 @@ where
     }
 
     fn reset_controller(registers: &mut xhci::Registers<M>) {
-        let operational = &registers.operational;
+        let operational = &mut registers.operational;
         assert!(
             operational.usbsts.read_volatile().hc_halted(),
             "xHC is not halted."
         );
         log::debug!("xHC is halted.");
 
-        operational
-            .usbcmd
-            .read_volatile()
-            .set_host_controller_reset(); // write 1
+        operational.usbcmd.update_volatile(|usbcmd| {
+            usbcmd.set_host_controller_reset();
+        });
         log::debug!("write 1 to USBCMD.HCRST, set_host_controller_reset");
 
         // wait for the reset to complete
