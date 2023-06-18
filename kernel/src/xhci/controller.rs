@@ -154,7 +154,7 @@ where
         }
 
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
-        let mut primary_interrupter = self.registers.interrupter_register_set.interrupter_mut(0);
+        let mut primary_interrupter = primary_interrupter;
         self.event_ring.pop(&mut primary_interrupter);
     }
 

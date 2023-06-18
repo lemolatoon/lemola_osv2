@@ -29,10 +29,14 @@ impl EventRingSegmentTableEntry {
         entry
     }
     pub fn ring_segment_base_address(&self) -> u64 {
-        ((self.data[0] as u64) << 32) | self.data[1] as u64
+        ((self.data[1] as u64) << 32) | (self.data[0] & 0xffff_ffff) as u64
     }
 
     pub fn set_ring_segment_base_address(&mut self, address: u64) {
+        assert!(
+            address.trailing_zeros() >= 6,
+            "The Event Ring Segment Table Base Address must be 64-byte aligned."
+        );
         let upper = (address >> 32) as u32;
         let lower = address as u32;
         // little endian
