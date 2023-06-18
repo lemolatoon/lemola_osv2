@@ -13,6 +13,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
+    serial_println,
     xhci::{command_ring::CommandRing, event_ring::EventRing},
 };
 
@@ -103,6 +104,19 @@ where
         let event_ring = EventRing::new(EVENT_RING_BUF_SIZE, &mut primary_interrupter);
         log::debug!("[XHCI] initialize event ring");
 
+        // enable interrupt for the primary interrupter
+        primary_interrupter
+            .iman
+            .update_volatile(|interrupter_management_register| {
+                interrupter_management_register.set_0_interrupt_pending();
+                interrupter_management_register.set_interrupt_enable();
+            });
+
+        // enable interrupt for the controller
+        registers.operational.usbcmd.update_volatile(|usbcmd| {
+            usbcmd.set_interrupter_enable();
+        });
+
         let port_configure_state = PortConfigureState::new();
 
         Self {
@@ -153,12 +167,14 @@ where
     }
 
     pub fn configure_port_at(&mut self, port_index: usize) {
+        log::debug!("configure port at: {}", port_index);
         if !self.port_configure_state.is_connected(port_index) {
             self.reset_port_at(port_index);
         }
     }
 
     pub fn reset_port_at(&mut self, port_index: usize) {
+        log::debug!("reset port at: {}", port_index);
         let is_connected = self.is_port_connected_at(port_index);
         if !is_connected {
             return;
@@ -180,6 +196,10 @@ where
                 }
 
                 self.port_configure_state.start_configuration_at(port_index);
+                log::debug!(
+                    "start clear connect status change and port reset port at: {}",
+                    port_index
+                );
                 self.port_register_sets()
                     .update_volatile_at(port_index, |port| {
                         // actual reset operation of port
@@ -260,7 +280,7 @@ where
                 unsafe {
                     scratchpad_buffer
                         .as_mut_ptr()
-                        .write(Box::leak(allocated_array) as *mut _)
+                        .write(Box::leak(allocated_array) as *mut [u8; PAGE_SIZE])
                 };
             }
 

@@ -1,5 +1,6 @@
 .PHONY: FORCE
 PROFILE=debug
+QEMU=qemu-system-x86_64
 
 ifeq ($(PROFILE),release)
 	CARGO_FLAGS=--release
@@ -31,7 +32,7 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel
 	sudo umount mnt
 
 run: disk.img
-	qemu-system-x86_64 \
+	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
@@ -44,7 +45,7 @@ run: disk.img
 # telnet localhost 5555
 
 run_gdb: disk.img
-	qemu-system-x86_64 \
+	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
@@ -142,4 +143,4 @@ clean:
 
 kill:
 	killall -9 qemu-system-x86_64
-	git checkout HEAD ovmf/lemola_os_ovmf_vars.fd
+	git checkout f249e14540fc9ea6cabe4bfd932db2888e0d97ee -- ovmf/lemola_os_ovmf_vars.fd

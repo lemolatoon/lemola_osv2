@@ -7,11 +7,17 @@ use xhci::{
     ring::trb,
 };
 
-use crate::{alloc::alloc::alloc_array_with_boundary_with_default_else, memory::PAGE_SIZE};
+use crate::{
+    alloc::alloc::{
+        alloc_array_with_boundary_with_default_else, alloc_with_boundary,
+        alloc_with_boundary_with_default_else,
+    },
+    memory::PAGE_SIZE,
+};
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct EventRingSegmentTableEntry {
+pub struct EventRingSegmentTableEntry /* erst */ {
     data: [u32; 4],
 }
 
@@ -29,8 +35,9 @@ impl EventRingSegmentTableEntry {
     pub fn set_ring_segment_base_address(&mut self, address: u64) {
         let upper = (address >> 32) as u32;
         let lower = address as u32;
-        self.data[0] = upper;
-        self.data[1] = lower;
+        // little endian
+        self.data[1] = upper;
+        self.data[0] = lower;
     }
 
     pub fn ring_segment_size(&self) -> u16 {
@@ -45,7 +52,7 @@ impl EventRingSegmentTableEntry {
 #[derive(Debug)]
 pub struct EventRing {
     trb_buffer: Box<[trb::Link]>,
-    event_ring_segment_table_entry: EventRingSegmentTableEntry,
+    event_ring_segment_table: Box<EventRingSegmentTableEntry>,
     cycle_bit: bool,
 }
 
@@ -73,8 +80,13 @@ impl EventRing {
         let ring_segment_base_address = trb_buffer.as_ptr() as u64;
         let ring_segment_size = trb_buffer.len() as u16;
         debug_assert_eq!(buf_size, ring_segment_size);
-        let event_ring_segment_table_entry =
-            EventRingSegmentTableEntry::new(ring_segment_base_address, ring_segment_size);
+        const ERST_ALIGNMENT: usize = 64;
+        const ERST_BOUNDARY: usize = 64 * 1024;
+        let event_ring_segment_table =
+            alloc_with_boundary_with_default_else(ERST_ALIGNMENT, ERST_BOUNDARY, || {
+                EventRingSegmentTableEntry::new(ring_segment_base_address, ring_segment_size)
+            })
+            .unwrap();
 
         primary_interrupter
             .erstsz
@@ -82,15 +94,32 @@ impl EventRing {
                 table_size_reg.set(1);
             });
 
+        let trb_buffer_head = trb_buffer.as_ptr() as u64;
         primary_interrupter
             .erdp
             .update_volatile(|event_ring_dequeue_pointer| {
-                event_ring_dequeue_pointer
-                    .set_event_ring_dequeue_pointer(&trb_buffer[0] as *const _ as u64)
+                event_ring_dequeue_pointer.set_event_ring_dequeue_pointer(trb_buffer_head)
             });
+        log::debug!(
+            "EventRingDequeuePointer(erdp): 0x{:x}(read_volatile), 0x{:x}(set)",
+            primary_interrupter
+                .erdp
+                .read_volatile()
+                .event_ring_dequeue_pointer(),
+            trb_buffer_head
+        );
+
+        let event_ring_table_head_ptr = event_ring_segment_table.as_ref() as *const _;
+        log::debug!("event_ring_table_head_ptr: {:p}", event_ring_table_head_ptr);
+        primary_interrupter.erstba.update_volatile(
+            |event_ring_segment_table_base_address_register| {
+                event_ring_segment_table_base_address_register
+                    .set(event_ring_table_head_ptr as u64);
+            },
+        );
 
         Self {
-            event_ring_segment_table_entry,
+            event_ring_segment_table,
             trb_buffer,
             cycle_bit,
         }
@@ -106,12 +135,11 @@ impl EventRing {
             .read_volatile()
             .event_ring_dequeue_pointer() as *mut trb::Link;
         let mut next = unsafe { dequeue_pointer.add(1) };
-        let segment_begin = self
-            .event_ring_segment_table_entry
-            .ring_segment_base_address() as *mut trb::Link;
+        let segment_begin =
+            self.event_ring_segment_table.ring_segment_base_address() as *mut trb::Link;
 
         let segment_end = unsafe {
-            segment_begin.add(self.event_ring_segment_table_entry.ring_segment_size() as usize)
+            segment_begin.add(self.event_ring_segment_table.ring_segment_size() as usize)
         };
 
         if next == segment_end {
