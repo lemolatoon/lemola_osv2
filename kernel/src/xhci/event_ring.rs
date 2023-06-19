@@ -1,6 +1,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use bit_field::BitField;
+use static_assertions::const_assert_eq;
 use xhci::{
     accessor::{marker::ReadWrite, Mapper},
     registers::runtime::Interrupter,
@@ -9,17 +10,18 @@ use xhci::{
 
 use crate::{
     alloc::alloc::{
-        alloc_array_with_boundary_with_default_else, alloc_with_boundary,
-        alloc_with_boundary_with_default_else,
+        alloc_array_with_boundary_with_default_else, alloc_with_boundary_with_default_else,
     },
     memory::PAGE_SIZE,
 };
 
 #[derive(Debug)]
-#[repr(transparent)]
+#[repr(C, align(64))]
 pub struct EventRingSegmentTableEntry /* erst */ {
     data: [u32; 4],
 }
+
+const_assert_eq!(core::mem::size_of::<EventRingSegmentTableEntry>(), 64);
 
 impl EventRingSegmentTableEntry {
     pub fn new(ring_segment_base_address: u64, ring_segment_size: u16) -> Self {
@@ -133,17 +135,22 @@ impl EventRing {
         self.cycle_bit
     }
 
-    pub fn pop<M: Mapper + Clone>(&mut self, interrupter: &mut Interrupter<'_, M, ReadWrite>) {
+    pub fn pop<M: Mapper + Clone>(
+        &mut self,
+        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+    ) -> trb::Link {
         let dequeue_pointer = interrupter
             .erdp
             .read_volatile()
             .event_ring_dequeue_pointer() as *mut trb::Link;
-        let mut next = unsafe { dequeue_pointer.add(1) };
+        let popped = unsafe { dequeue_pointer.read_volatile() };
+        let mut next = unsafe { dequeue_pointer.offset(1) };
+        const_assert_eq!(core::mem::size_of::<trb::Link>(), 16);
         let segment_begin =
             self.event_ring_segment_table.ring_segment_base_address() as *mut trb::Link;
 
         let segment_end = unsafe {
-            segment_begin.add(self.event_ring_segment_table.ring_segment_size() as usize)
+            segment_begin.offset(self.event_ring_segment_table.ring_segment_size() as isize)
         };
 
         if next == segment_end {
@@ -151,8 +158,9 @@ impl EventRing {
             self.cycle_bit = !self.cycle_bit;
         }
 
-        interrupter.erstba.update_volatile(|erstba| {
-            erstba.set(next as u64);
+        interrupter.erdp.update_volatile(|erdp| {
+            erdp.set_event_ring_dequeue_pointer(next as u64);
         });
+        return popped;
     }
 }
