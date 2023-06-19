@@ -78,15 +78,15 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     log::info!("xhc initialized");
     controller.run();
 
-    for port_index in 0..controller.number_of_ports() {
+    for port_id in 0..controller.number_of_ports() {
         let is_connected = controller
             .port_register_sets()
-            .read_volatile_at(port_index as usize)
+            .read_volatile_at(port_id as usize)
             .portsc
             .current_connect_status();
-        log::debug!("Port {}: is_connected = {}", port_index, is_connected);
+        log::debug!("Port {}: is_connected = {}", port_id, is_connected);
         if is_connected {
-            controller.configure_port_at(port_index as usize);
+            controller.configure_port_at(port_id as usize);
         }
     }
     log::debug!("Configured ports");

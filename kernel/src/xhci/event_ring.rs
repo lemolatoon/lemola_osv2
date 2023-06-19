@@ -5,7 +5,7 @@ use static_assertions::const_assert_eq;
 use xhci::{
     accessor::{marker::ReadWrite, Mapper},
     registers::runtime::Interrupter,
-    ring::trb,
+    ring::trb::{self, event},
 };
 
 use crate::{
@@ -138,7 +138,7 @@ impl EventRing {
     pub fn pop<M: Mapper + Clone>(
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
-    ) -> trb::Link {
+    ) -> event::Allowed {
         let dequeue_pointer = interrupter
             .erdp
             .read_volatile()
@@ -161,6 +161,6 @@ impl EventRing {
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
         });
-        return popped;
+        event::Allowed::try_from(popped.into_raw()).expect("unexpected trb")
     }
 }
