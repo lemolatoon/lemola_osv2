@@ -14,7 +14,7 @@ use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
     serial_println,
-    xhci::{command_ring::CommandRing, event_ring::EventRing, port},
+    xhci::{command_ring::CommandRing, event_ring::EventRing, port, trb::TrbRaw},
 };
 
 use super::{
@@ -342,9 +342,16 @@ where
     }
 
     fn register_command_ring(registers: &mut xhci::Registers<M>, ring: &CommandRing) {
-        let command_ring_controller_register = &mut registers.operational.crcr.read_volatile();
-        command_ring_controller_register.clear_ring_cycle_state();
-        command_ring_controller_register.set_command_ring_pointer(ring.buffer_ptr() as u64);
+        registers
+            .operational
+            .crcr
+            .update_volatile(|command_ring_controller_register| {
+                command_ring_controller_register.set_ring_cycle_state();
+                command_ring_controller_register.set_command_stop(); // TODO: 本当はfalseを入れたいが...
+                command_ring_controller_register.set_command_abort();
+                command_ring_controller_register
+                    .set_command_ring_pointer(ring.buffer_ptr() as *const TrbRaw as u64);
+            });
     }
 
     fn request_hc_ownership(

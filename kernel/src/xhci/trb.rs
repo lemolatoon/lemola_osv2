@@ -12,6 +12,12 @@ impl TrbRaw {
     pub fn into_raw(self) -> [u32; 4] {
         self.0
     }
+
+    pub fn write_in_order(&mut self, another: Self) {
+        for (dst, src) in self.0.iter_mut().zip(another.into_raw()) {
+            *dst = src;
+        }
+    }
 }
 
 impl TryFrom<TrbRaw> for trb::event::Allowed {

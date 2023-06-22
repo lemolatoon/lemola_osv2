@@ -13,6 +13,7 @@ use crate::{
         alloc_array_with_boundary_with_default_else, alloc_with_boundary_with_default_else,
     },
     memory::PAGE_SIZE,
+    xhci::trb::TrbRaw,
 };
 
 #[derive(Debug)]
@@ -142,12 +143,12 @@ impl EventRing {
         let dequeue_pointer = interrupter
             .erdp
             .read_volatile()
-            .event_ring_dequeue_pointer() as *mut trb::Link;
+            .event_ring_dequeue_pointer() as *mut TrbRaw;
         let popped = unsafe { dequeue_pointer.read_volatile() };
         let mut next = unsafe { dequeue_pointer.offset(1) };
-        const_assert_eq!(core::mem::size_of::<trb::Link>(), 16);
+        const_assert_eq!(core::mem::size_of::<TrbRaw>(), 16);
         let segment_begin =
-            self.event_ring_segment_table.ring_segment_base_address() as *mut trb::Link;
+            self.event_ring_segment_table.ring_segment_base_address() as *mut TrbRaw;
 
         let segment_end = unsafe {
             segment_begin.offset(self.event_ring_segment_table.ring_segment_size() as isize)
@@ -158,6 +159,7 @@ impl EventRing {
             self.cycle_bit = !self.cycle_bit;
         }
 
+        log::debug!("next dequeue ptr: {:p}", next);
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
         });

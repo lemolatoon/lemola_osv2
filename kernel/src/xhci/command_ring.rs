@@ -31,8 +31,8 @@ impl CommandRing {
         }
     }
 
-    pub fn buffer_ptr(&self) -> *const TrbRaw {
-        self.trb_buffer.as_ptr()
+    pub fn buffer_ptr(&self) -> *const [TrbRaw] {
+        &*self.trb_buffer as *const [TrbRaw]
     }
 
     pub fn toggle_cycle_bit(&mut self) {
@@ -45,8 +45,11 @@ impl CommandRing {
         } else {
             cmd.clear_cycle_bit();
         }
-        // TODO: 書き込み順番は重要 ?
-        self.trb_buffer[self.write_index] = TrbRaw::new_unchecked(cmd.into_raw());
+        self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
+        log::debug!(
+            "command ring trb ptr: {:p}",
+            &self.trb_buffer[self.write_index]
+        );
 
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
@@ -54,7 +57,8 @@ impl CommandRing {
             // reached end of the ring
             let mut link = trb::Link::new();
             link.set_toggle_cycle();
-            self.trb_buffer[self.write_index] = TrbRaw::new_unchecked(link.into_raw());
+            self.trb_buffer[self.write_index]
+                .write_in_order(TrbRaw::new_unchecked(link.into_raw()));
 
             self.write_index = 0;
             self.toggle_cycle_bit();
