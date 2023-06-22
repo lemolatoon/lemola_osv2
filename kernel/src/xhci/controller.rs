@@ -268,6 +268,7 @@ where
             port_index,
             slot_id
         );
+        let device = self.device_manager.allocate_device(slot_id);
         todo!()
     }
 

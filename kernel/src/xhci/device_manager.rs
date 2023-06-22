@@ -1,9 +1,14 @@
 extern crate alloc;
+use core::panic;
+
 use alloc::vec;
 use alloc::{boxed::Box, vec::Vec};
 use xhci::context::Device64Byte;
 
-use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
+use crate::alloc::alloc::{
+    alloc_array_with_boundary_with_default_else, alloc_with_boundary, alloc_with_boundary_raw,
+    alloc_with_boundary_with_default_else,
+};
 use crate::memory::PAGE_SIZE;
 
 #[derive(Debug)]
@@ -28,12 +33,34 @@ impl DeviceManager {
     pub fn get_device_contexts_head_ptr(&mut self) -> *mut *mut Device64Byte {
         self.device_context_array.device_contexts.as_mut_ptr()
     }
+
+    pub fn allocate_device(&mut self, slot_id: usize) -> &DeviceContextInfo {
+        if slot_id > self.device_context_array.max_slots() {
+            log::error!(
+                "slot_id is out of range: {} / {}",
+                slot_id,
+                self.device_context_array.max_slots()
+            );
+            panic!("slot_id is out of range");
+        }
+
+        if self.device_context_array.device_context_infos[slot_id].is_none() {
+            log::error!("device context at {} is already allocated", slot_id);
+            panic!("device context at {} is already allocated", slot_id);
+        }
+
+        self.device_context_array.device_context_infos[slot_id] =
+            Some(DeviceContextInfo::blank(slot_id));
+        self.device_context_array.device_context_infos[slot_id]
+            .as_ref()
+            .unwrap()
+    }
 }
 
 #[derive(Debug)]
 struct DeviceContextArray {
     device_contexts: Box<[*mut Device64Byte]>,
-    device_context_infos: Vec<Option<Box<DeviceContextInfo>>>,
+    device_context_infos: Vec<Option<DeviceContextInfo>>,
 }
 
 impl DeviceContextArray {
@@ -55,10 +82,14 @@ impl DeviceContextArray {
             device_context_infos,
         }
     }
+
+    pub fn max_slots(&self) -> usize {
+        self.device_contexts.len() - 1
+    }
 }
 
 #[derive(Debug, Clone)]
-struct DeviceContextInfo {
+pub struct DeviceContextInfo {
     slot_id: usize,
     state: DeviceContextState,
 }
@@ -69,6 +100,10 @@ impl DeviceContextInfo {
             slot_id,
             state: DeviceContextState::Blank,
         }
+    }
+
+    pub fn slot_id(&self) -> usize {
+        self.slot_id
     }
 }
 
