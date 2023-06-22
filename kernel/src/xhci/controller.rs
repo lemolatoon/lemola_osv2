@@ -158,7 +158,9 @@ where
         let event_trb = self.event_ring.pop(&mut primary_interrupter);
         match event_trb {
             event::Allowed::TransferEvent(_) => todo!(),
-            event::Allowed::CommandCompletion(_) => todo!(),
+            event::Allowed::CommandCompletion(command_completion) => {
+                self.process_command_completion_event(command_completion)
+            }
             event::Allowed::PortStatusChange(port_status_change) => {
                 self.process_port_status_change_event(port_status_change)
             }
@@ -258,6 +260,15 @@ where
                 doorbell.set_doorbell_stream_id(0);
             })
         }
+    }
+
+    fn address_device_at(&mut self, port_index: usize, slot_id: usize) {
+        log::debug!(
+            "address device at: port_index: {}, slot_id: {}",
+            port_index,
+            slot_id
+        );
+        todo!()
     }
 
     pub fn is_port_connected_at(&self, port_index: usize) -> bool {
@@ -387,7 +398,7 @@ impl<M> XhciController<M>
 where
     M: Mapper + Clone,
 {
-    // process event
+    // process events
 
     fn process_port_status_change_event(&mut self, event: trb::event::PortStatusChange) {
         log::debug!("PortStatusChangeEvent: port_id: {}", event.port_id());
@@ -404,6 +415,68 @@ where
                 log::error!("InvalidPhase: {:?}", state);
                 panic!("InvalidPhase")
             }
+        }
+    }
+
+    fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
+        let slot_id = event.slot_id();
+        let Ok(completion_code) = event.completion_code() else { log::error!("Invalid CommandCompletionEvent: {:?}, slot_id: {}", event, slot_id);
+            return;
+        };
+
+        if completion_code != trb::event::CompletionCode::Success {
+            log::error!(
+                "CommandCompletionEvent failed: {:?}, slot_id: {}",
+                completion_code,
+                slot_id
+            );
+            return;
+        }
+
+        let trb_raw =
+            unsafe { TrbRaw::new_from_ptr(event.command_trb_pointer() as *const [u32; 4]) };
+        let Ok(command_trb) = trb::command::Allowed::try_from(trb_raw) else {
+            log::error!("Failed to parse CommandCompletionEvent: {:?}, slot_id: {}", event, slot_id);
+            return;
+        };
+
+        log::debug!(
+            "CommandCompletionEvent: {:?}, slot_id: {}",
+            command_trb,
+            slot_id
+        );
+
+        match command_trb {
+            trb::command::Allowed::Link(_) => todo!(),
+            trb::command::Allowed::EnableSlot(enable_slot) => {
+                let Some(addressing_port_phase) = self.port_configure_state.addressing_port_phase() else {
+                    log::error!("No addressing port: {:?}", self.port_configure_state.addressing_port_index);
+                    panic!("InvalidPhase");
+                };
+                if addressing_port_phase != PortConfigPhase::EnablingSlot {
+                    log::error!("InvalidPhase: {:?}", addressing_port_phase);
+                    panic!("InvalidPhase")
+                }
+
+                let addressing_port_idx = self.port_configure_state.addressing_port_index.unwrap();
+                self.address_device_at(addressing_port_idx, slot_id as usize);
+            }
+            trb::command::Allowed::DisableSlot(_) => todo!(),
+            trb::command::Allowed::AddressDevice(_) => todo!(),
+            trb::command::Allowed::ConfigureEndpoint(_) => todo!(),
+            trb::command::Allowed::EvaluateContext(_) => todo!(),
+            trb::command::Allowed::ResetEndpoint(_) => todo!(),
+            trb::command::Allowed::StopEndpoint(_) => todo!(),
+            trb::command::Allowed::SetTrDequeuePointer(_) => todo!(),
+            trb::command::Allowed::ResetDevice(_) => todo!(),
+            trb::command::Allowed::ForceEvent(_) => todo!(),
+            trb::command::Allowed::NegotiateBandwidth(_) => todo!(),
+            trb::command::Allowed::SetLatencyToleranceValue(_) => todo!(),
+            trb::command::Allowed::GetPortBandwidth(_) => todo!(),
+            trb::command::Allowed::ForceHeader(_) => todo!(),
+            trb::command::Allowed::Noop(_) => todo!(),
+            trb::command::Allowed::GetExtendedProperty(_) => todo!(),
+            trb::command::Allowed::SetExtendedProperty(_) => todo!(),
         }
     }
 }

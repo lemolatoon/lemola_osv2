@@ -9,6 +9,10 @@ impl TrbRaw {
         TrbRaw(raw)
     }
 
+    pub unsafe fn new_from_ptr(ptr: *const [u32; 4]) -> Self {
+        Self::new_unchecked(*ptr)
+    }
+
     pub fn into_raw(self) -> [u32; 4] {
         self.0
     }

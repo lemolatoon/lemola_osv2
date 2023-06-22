@@ -22,6 +22,16 @@ impl PortConfigureState {
         self.port_config_phase[port_id]
     }
 
+    pub fn addressing_port_phase(&self) -> Option<PortConfigPhase> {
+        self.addressing_port_index
+            .map(|idx| self.port_config_phase[idx])
+    }
+
+    pub fn set_addressing_port_phase(&mut self, phase: PortConfigPhase) {
+        self.addressing_port_index
+            .map(|idx| self.port_config_phase[idx] = phase);
+    }
+
     pub fn start_configuration_at(&mut self, port_idx: usize) {
         self.addressing_port_index = Some(port_idx);
         self.port_config_phase[port_idx] = PortConfigPhase::ResettingPort;
