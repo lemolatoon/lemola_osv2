@@ -3,13 +3,12 @@ use core::panic;
 
 use alloc::vec;
 use alloc::{boxed::Box, vec::Vec};
-use xhci::context::{Device64Byte, Input64Byte, SlotHandler};
-use xhci::registers::operational::PortStatusAndControlRegister;
-
-use crate::alloc::alloc::{
-    alloc_array_with_boundary_with_default_else, alloc_with_boundary, alloc_with_boundary_raw,
-    alloc_with_boundary_with_default_else,
+use static_assertions::assert_eq_size;
+use xhci::context::{
+    Device32Byte, Device64Byte, EndpointHandler, Input32Byte, Input64Byte, SlotHandler,
 };
+
+use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
 use crate::memory::PAGE_SIZE;
 
 #[derive(Debug)]
@@ -28,10 +27,10 @@ impl DeviceManager {
     pub fn set_scratchpad_buffer_array(&mut self, ptr_head: Box<[*mut [u8; PAGE_SIZE]]>) {
         // This pointer cast is safe, because it is based on xhci specification
         self.device_context_array.device_contexts[0] =
-            Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device64Byte;
+            Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device32Byte;
     }
 
-    pub fn get_device_contexts_head_ptr(&mut self) -> *mut *mut Device64Byte {
+    pub fn get_device_contexts_head_ptr(&mut self) -> *mut *mut Device32Byte {
         self.device_context_array.device_contexts.as_mut_ptr()
     }
 
@@ -64,11 +63,23 @@ impl DeviceManager {
     pub fn device_by_slot_id_mut(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo> {
         self.device_context_array.device_context_infos[slot_id].as_mut()
     }
+
+    pub fn load_device_context(&mut self, slot_id: usize) {
+        if slot_id > self.device_context_array.max_slots() {
+            log::error!("Invalid slot_id: {}", slot_id);
+            panic!("Invalid slot_id: {}", slot_id);
+        }
+        let device_context_info = self.device_context_array.device_context_infos[slot_id]
+            .as_mut()
+            .unwrap();
+        self.device_context_array.device_contexts[slot_id] =
+            &mut device_context_info.device_context.0 as *mut Device32Byte;
+    }
 }
 
 #[derive(Debug)]
 struct DeviceContextArray {
-    device_contexts: Box<[*mut Device64Byte]>,
+    device_contexts: Box<[*mut Device32Byte]>,
     device_context_infos: Vec<Option<DeviceContextInfo>>,
 }
 
@@ -82,7 +93,7 @@ impl DeviceContextArray {
             device_contexts_len,
             ALIGNMENT,
             PAGE_SIZE,
-            || 0 as *mut Device64Byte,
+            || 0 as *mut Device32Byte,
         )
         .expect("DeviceContextArray allocation failed");
         let device_context_infos = vec![None; device_contexts_len];
@@ -98,10 +109,19 @@ impl DeviceContextArray {
 }
 
 #[derive(Debug, Clone)]
+#[repr(align(64))]
+pub struct InputContextWrapper(Input32Byte);
+
+#[derive(Debug, Clone)]
+#[repr(align(64))]
+pub struct DeviceContextWrapper(Device32Byte);
+
+#[derive(Debug, Clone)]
 pub struct DeviceContextInfo {
     slot_id: usize,
     state: DeviceContextState,
-    pub input_context: Input64Byte,
+    pub input_context: InputContextWrapper,
+    pub device_context: DeviceContextWrapper,
 }
 
 impl DeviceContextInfo {
@@ -109,7 +129,8 @@ impl DeviceContextInfo {
         Self {
             slot_id,
             state: DeviceContextState::Blank,
-            input_context: Input64Byte::new_64byte(), // 0 filled
+            input_context: InputContextWrapper(Input32Byte::new_32byte()), // 0 filled
+            device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
         }
     }
 
@@ -119,19 +140,20 @@ impl DeviceContextInfo {
 
     pub fn enable_slot_context(&mut self) {
         use xhci::context::InputHandler;
-        let control = self.input_context.control_mut();
-        control.set_add_context_flag(1);
+        let control = self.input_context.0.control_mut();
+        control.set_add_context_flag(0);
     }
 
     pub fn enable_endpoint(&mut self, endpoint_id: EndpointId) {
         use xhci::context::InputHandler;
-        let control = self.input_context.control_mut();
-        control.set_add_context_flag(1 << endpoint_id.address());
+        let control = self.input_context.0.control_mut();
+        control.set_add_context_flag(endpoint_id.address());
     }
 
     pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
         use xhci::context::InputHandler;
-        let slot_context = self.input_context.device_mut().slot_mut();
+        log::debug!("initialize_slot_context: port_id: {}", port_id);
+        let slot_context = self.input_context.0.device_mut().slot_mut();
         slot_context.set_route_string(0);
         slot_context.set_root_hub_port_number(port_id);
         slot_context.set_context_entries(1);
@@ -140,7 +162,23 @@ impl DeviceContextInfo {
 
     pub fn slot_context(&self) -> &dyn SlotHandler {
         use xhci::context::InputHandler;
-        self.input_context.device().slot()
+        self.input_context.0.device().slot()
+    }
+
+    pub fn endpoint_context(&self, endpoint_id: EndpointId) -> &dyn EndpointHandler {
+        use xhci::context::InputHandler;
+        self.input_context
+            .0
+            .device()
+            .endpoint(endpoint_id.address())
+    }
+
+    pub fn endpoint_context_mut(&mut self, endpoint_id: EndpointId) -> &mut dyn EndpointHandler {
+        use xhci::context::InputHandler;
+        self.input_context
+            .0
+            .device_mut()
+            .endpoint_mut(endpoint_id.address())
     }
 
     pub fn initialize_endpoint0_context(
@@ -153,6 +191,7 @@ impl DeviceContextInfo {
         let endpoint_context_0_id = EndpointId::new(0, false);
         let endpoint0_context = self
             .input_context
+            .0
             .device_mut()
             .endpoint_mut(endpoint_context_0_id.address());
 

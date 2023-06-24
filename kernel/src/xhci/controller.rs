@@ -4,7 +4,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use xhci::{
     accessor::{array, Mapper},
-    context::Endpoint,
+    context::{Endpoint, Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
     registers::PortRegisterSet,
     ring::trb::{self, event},
@@ -311,7 +311,42 @@ where
 
         device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
 
-        todo!();
+        self.device_manager.load_device_context(slot_id);
+        let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
+
+        let slot_context = device.slot_context();
+        log::debug!("slot context: {:x?}", slot_context.as_ref());
+        log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
+        let endpoint0_context = device.endpoint_context(endpoint_context_0_id);
+        log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
+        log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
+
+        self.port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
+
+        let mut address_device_command = trb::command::AddressDevice::new();
+        let input_context_pointer = &device.input_context as *const _ as u64;
+        let slot_context_pointer = (input_context_pointer + 32) as *const Slot64Byte;
+        let ep0_context_pointer = (input_context_pointer + 64) as *const Endpoint64Byte;
+        log::debug!("slot context pointer?: {:p}", slot_context_pointer);
+        log::debug!("ep0 context pointer?: {:p}", ep0_context_pointer);
+        unsafe {
+            let slot_context = &*slot_context_pointer;
+            let ep0_context = &*ep0_context_pointer;
+            let slot_context_raw = slot_context.as_ref();
+            let ep0_context_raw = ep0_context.as_ref();
+            log::debug!("slot context: {:x?}", slot_context_raw);
+            log::debug!("ep0 context: {:x?}", ep0_context_raw);
+        }
+        log::debug!("input context pointer: {:#x}", input_context_pointer);
+        address_device_command.set_input_context_pointer(input_context_pointer);
+        address_device_command.set_slot_id(slot_id as u8);
+        log::debug!("address device command: {:#x?}", address_device_command);
+        let address_device_command = trb::command::Allowed::AddressDevice(address_device_command);
+        self.command_ring.push(address_device_command);
+        self.registers.doorbell.update_volatile_at(0, |doorbell| {
+            doorbell.set_doorbell_target(0);
+            doorbell.set_doorbell_stream_id(0);
+        })
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
@@ -481,6 +516,7 @@ where
                 completion_code,
                 slot_id
             );
+            log::error!("{:?}", event);
             return;
         }
 
