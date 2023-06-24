@@ -14,12 +14,12 @@ impl PortConfigureState {
         }
     }
 
-    pub fn is_connected(&self, port_id: usize) -> bool {
-        self.port_config_phase[port_id] != PortConfigPhase::NotConnected
+    pub fn is_connected(&self, port_idx: usize) -> bool {
+        self.port_config_phase[port_idx] != PortConfigPhase::NotConnected
     }
 
-    pub fn port_phase_at(&self, port_id: usize) -> PortConfigPhase {
-        self.port_config_phase[port_id]
+    pub fn port_phase_at(&self, port_idx: usize) -> PortConfigPhase {
+        self.port_config_phase[port_idx]
     }
 
     pub fn addressing_port_phase(&self) -> Option<PortConfigPhase> {

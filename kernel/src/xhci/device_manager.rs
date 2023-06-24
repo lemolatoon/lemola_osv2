@@ -3,7 +3,8 @@ use core::panic;
 
 use alloc::vec;
 use alloc::{boxed::Box, vec::Vec};
-use xhci::context::Device64Byte;
+use xhci::context::{Device64Byte, Input64Byte};
+use xhci::registers::operational::PortStatusAndControlRegister;
 
 use crate::alloc::alloc::{
     alloc_array_with_boundary_with_default_else, alloc_with_boundary, alloc_with_boundary_raw,
@@ -34,7 +35,7 @@ impl DeviceManager {
         self.device_context_array.device_contexts.as_mut_ptr()
     }
 
-    pub fn allocate_device(&mut self, slot_id: usize) -> &DeviceContextInfo {
+    pub fn allocate_device(&mut self, slot_id: usize) -> &mut DeviceContextInfo {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
                 "slot_id is out of range: {} / {}",
@@ -44,7 +45,7 @@ impl DeviceManager {
             panic!("slot_id is out of range");
         }
 
-        if self.device_context_array.device_context_infos[slot_id].is_none() {
+        if self.device_context_array.device_context_infos[slot_id].is_some() {
             log::error!("device context at {} is already allocated", slot_id);
             panic!("device context at {} is already allocated", slot_id);
         }
@@ -52,8 +53,16 @@ impl DeviceManager {
         self.device_context_array.device_context_infos[slot_id] =
             Some(DeviceContextInfo::blank(slot_id));
         self.device_context_array.device_context_infos[slot_id]
-            .as_ref()
+            .as_mut()
             .unwrap()
+    }
+
+    pub fn device_by_slot_id(&self, slot_id: usize) -> Option<&DeviceContextInfo> {
+        self.device_context_array.device_context_infos[slot_id].as_ref()
+    }
+
+    pub fn device_by_slot_id_mut(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo> {
+        self.device_context_array.device_context_infos[slot_id].as_mut()
     }
 }
 
@@ -92,6 +101,7 @@ impl DeviceContextArray {
 pub struct DeviceContextInfo {
     slot_id: usize,
     state: DeviceContextState,
+    pub input_context: Input64Byte,
 }
 
 impl DeviceContextInfo {
@@ -99,11 +109,49 @@ impl DeviceContextInfo {
         Self {
             slot_id,
             state: DeviceContextState::Blank,
+            input_context: Input64Byte::new_64byte(), // 0 filled
         }
     }
 
     pub fn slot_id(&self) -> usize {
         self.slot_id
+    }
+
+    pub fn enable_slot_context(&mut self) {
+        use xhci::context::InputHandler;
+        let control = self.input_context.control_mut();
+        control.set_add_context_flag(1);
+    }
+
+    pub fn enable_endpoint(&mut self, endpoint_id: EndpointId) {
+        use xhci::context::InputHandler;
+        let control = self.input_context.control_mut();
+        control.set_add_context_flag(1 << endpoint_id.address());
+    }
+
+    pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
+        use xhci::context::InputHandler;
+        let slot_context = self.input_context.device_mut().slot_mut();
+        slot_context.set_route_string(0);
+        slot_context.set_root_hub_port_number(port_id);
+        slot_context.set_context_entries(1);
+        slot_context.set_speed(port_speed);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndpointId {
+    address: usize,
+}
+
+impl EndpointId {
+    pub fn new(endpoint_number: usize, direct_in: bool) -> Self {
+        let address = endpoint_number * 2 + if direct_in { 1 } else { 0 };
+        Self { address }
+    }
+
+    pub fn address(&self) -> usize {
+        self.address
     }
 }
 

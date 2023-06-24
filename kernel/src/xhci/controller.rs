@@ -4,6 +4,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use xhci::{
     accessor::{array, Mapper},
+    context::Endpoint,
     extended_capabilities::{self, usb_legacy_support_capability},
     registers::PortRegisterSet,
     ring::trb::{self, event},
@@ -14,7 +15,10 @@ use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
     serial_println,
-    xhci::{command_ring::CommandRing, event_ring::EventRing, port, trb::TrbRaw},
+    xhci::{
+        command_ring::CommandRing, device_manager::EndpointId, event_ring::EventRing, port,
+        trb::TrbRaw,
+    },
 };
 
 use super::{
@@ -180,16 +184,16 @@ where
         self.number_of_ports
     }
 
-    pub fn configure_port_at(&mut self, port_id: usize) {
-        log::debug!("configure port at: {}", port_id);
-        if !self.port_configure_state.is_connected(port_id) {
-            self.reset_port_at(port_id);
+    pub fn configure_port_at(&mut self, port_idx: usize) {
+        log::debug!("configure port at: {}", port_idx);
+        if !self.port_configure_state.is_connected(port_idx) {
+            self.reset_port_at(port_idx);
         }
     }
 
-    pub fn reset_port_at(&mut self, port_id: usize) {
-        log::debug!("reset port at: {}", port_id);
-        let is_connected = self.is_port_connected_at(port_id);
+    pub fn reset_port_at(&mut self, port_idx: usize) {
+        log::debug!("reset port at: {}", port_idx);
+        let is_connected = self.is_port_connected_at(port_idx);
         if !is_connected {
             return;
         }
@@ -197,11 +201,11 @@ where
         match self.port_configure_state.addressing_port_index {
             Some(_) => {
                 // This branch is fallen, when another port is currently trying to be configured
-                self.port_configure_state.port_config_phase[port_id] =
+                self.port_configure_state.port_config_phase[port_idx] =
                     PortConfigPhase::WaitingAddressed;
             }
             None => {
-                let port_phase = self.port_configure_state.port_phase_at(port_id);
+                let port_phase = self.port_configure_state.port_phase_at(port_idx);
                 if !matches!(
                     port_phase,
                     PortConfigPhase::NotConnected | PortConfigPhase::WaitingAddressed
@@ -209,30 +213,30 @@ where
                     panic!("INVALID PortConfigPhase state.");
                 }
 
-                self.port_configure_state.start_configuration_at(port_id);
+                self.port_configure_state.start_configuration_at(port_idx);
                 log::debug!(
                     "start clear connect status change and port reset port at: {}",
-                    port_id
+                    port_idx
                 );
                 self.port_register_sets()
-                    .update_volatile_at(port_id, |port| {
+                    .update_volatile_at(port_idx, |port| {
                         // actual reset operation of port
                         port.portsc.clear_connect_status_change();
                         port.portsc.set_port_reset();
                     });
                 while self
                     .port_register_sets()
-                    .read_volatile_at(port_id)
+                    .read_volatile_at(port_idx)
                     .portsc
                     .port_reset()
                 {}
-                log::debug!("[XHCI] port at {} is now reset!", port_id);
+                log::debug!("[XHCI] port at {} is now reset!", port_idx);
             }
         }
     }
 
-    pub fn enable_slot_at(&mut self, port_id: usize) {
-        let port_reg_set = self.port_register_sets().read_volatile_at(port_id);
+    pub fn enable_slot_at(&mut self, port_idx: usize) {
+        let port_reg_set = self.port_register_sets().read_volatile_at(port_idx);
         let is_enabled = port_reg_set.portsc.port_enabled_disabled();
         let reset_completed = port_reg_set.portsc.connect_status_change();
 
@@ -244,13 +248,13 @@ where
 
         if is_enabled && reset_completed {
             self.port_register_sets()
-                .update_volatile_at(port_id, |port_reg_set| {
+                .update_volatile_at(port_idx, |port_reg_set| {
                     // clear port reset change
                     port_reg_set.portsc.clear_port_reset_change();
                     port_reg_set.portsc.set_0_port_reset_change();
                 });
 
-            self.port_configure_state.port_config_phase[port_id] = PortConfigPhase::EnablingSlot;
+            self.port_configure_state.port_config_phase[port_idx] = PortConfigPhase::EnablingSlot;
 
             let enable_slot_cmd =
                 trb::command::Allowed::EnableSlot(trb::command::EnableSlot::new());
@@ -268,8 +272,17 @@ where
             port_index,
             slot_id
         );
+        let endpoint_context_0_id = EndpointId::new(0, false);
         let device = self.device_manager.allocate_device(slot_id);
-        todo!()
+        device.enable_slot_context();
+        device.enable_endpoint(endpoint_context_0_id);
+        let porttsc = self
+            .port_register_sets()
+            .read_volatile_at(port_index)
+            .portsc;
+        let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
+        device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
+        todo!();
     }
 
     pub fn is_port_connected_at(&self, port_index: usize) -> bool {
@@ -403,14 +416,14 @@ where
 
     fn process_port_status_change_event(&mut self, event: trb::event::PortStatusChange) {
         log::debug!("PortStatusChangeEvent: port_id: {}", event.port_id());
-        let port_id = event.port_id() as usize - 1;
+        let port_idx = event.port_id() as usize - 1;
 
-        match self.port_configure_state.port_phase_at(port_id) {
-            PortConfigPhase::NotConnected => self.reset_port_at(port_id),
+        match self.port_configure_state.port_phase_at(port_idx) {
+            PortConfigPhase::NotConnected => self.reset_port_at(port_idx),
             PortConfigPhase::ResettingPort => {
                 // already called reset_port_at once
-                self.enable_slot_at(port_id);
-                log::debug!("enable slot at {} done", port_id);
+                self.enable_slot_at(port_idx);
+                log::debug!("enable slot at {} done", port_idx);
             }
             state => {
                 log::error!("InvalidPhase: {:?}", state);
