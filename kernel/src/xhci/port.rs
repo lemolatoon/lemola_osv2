@@ -14,12 +14,24 @@ impl PortConfigureState {
         }
     }
 
+    pub const fn len(&self) -> usize {
+        self.port_config_phase.len()
+    }
+
+    pub fn clear_addressing_port_index(&mut self) {
+        self.addressing_port_index = None;
+    }
+
     pub fn is_connected(&self, port_idx: usize) -> bool {
         self.port_config_phase[port_idx] != PortConfigPhase::NotConnected
     }
 
     pub fn port_phase_at(&self, port_idx: usize) -> PortConfigPhase {
         self.port_config_phase[port_idx]
+    }
+
+    pub fn addressing_port(&self) -> Option<usize> {
+        self.addressing_port_index
     }
 
     pub fn addressing_port_phase(&self) -> Option<PortConfigPhase> {

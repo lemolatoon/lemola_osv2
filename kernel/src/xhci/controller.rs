@@ -349,6 +349,10 @@ where
         })
     }
 
+    pub fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
+        todo!()
+    }
+
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
         match slot_speed {
             4 => 512, // SuperSpeed
@@ -549,7 +553,45 @@ where
                 self.address_device_at(addressing_port_idx, slot_id as usize);
             }
             trb::command::Allowed::DisableSlot(_) => todo!(),
-            trb::command::Allowed::AddressDevice(_) => todo!(),
+            trb::command::Allowed::AddressDevice(_address_device) => {
+                let Some(device) = self.device_manager.device_by_slot_id(slot_id as usize) else {
+                    log::error!("InvalidSlotId: {}", slot_id);
+                    panic!("InvalidSlotId")
+                };
+
+                let port_index = device.slot_context().root_hub_port_number() - 1;
+
+                if self.port_configure_state.addressing_port_index != Some(port_index as usize) {
+                    log::error!(
+                        "InvalidPhase:\naddressing: {:?}, received: {}",
+                        self.port_configure_state.addressing_port(),
+                        port_index
+                    );
+                    panic!("InvalidPhase")
+                }
+
+                if self.port_configure_state.addressing_port_phase()
+                    != Some(PortConfigPhase::AddressingDevice)
+                {
+                    log::error!(
+                        "InvalidPhase: {:?}",
+                        self.port_configure_state.addressing_port_phase()
+                    );
+                    panic!("InvalidPhase")
+                }
+
+                self.port_configure_state.clear_addressing_port_index();
+                for port_idx in 0..self.port_configure_state.len() {
+                    if self.port_configure_state.port_phase_at(port_idx)
+                        == PortConfigPhase::WaitingAddressed
+                    {
+                        self.reset_port_at(port_idx);
+                        break;
+                    }
+                }
+
+                self.initialize_device_at(port_index, slot_id);
+            }
             trb::command::Allowed::ConfigureEndpoint(_) => todo!(),
             trb::command::Allowed::EvaluateContext(_) => todo!(),
             trb::command::Allowed::ResetEndpoint(_) => todo!(),

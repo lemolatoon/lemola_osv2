@@ -114,7 +114,7 @@ pub struct InputContextWrapper(Input32Byte);
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
-pub struct DeviceContextWrapper(Device32Byte);
+pub struct DeviceContextWrapper(pub Device32Byte);
 
 #[derive(Debug, Clone)]
 pub struct DeviceContextInfo {
