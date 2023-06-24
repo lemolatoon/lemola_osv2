@@ -120,6 +120,7 @@ pub struct DeviceContextWrapper(pub Device32Byte);
 pub struct DeviceContextInfo {
     slot_id: usize,
     state: DeviceContextState,
+    pub initialization_state: DeviceInitializationState,
     pub input_context: InputContextWrapper,
     pub device_context: DeviceContextWrapper,
 }
@@ -129,6 +130,7 @@ impl DeviceContextInfo {
         Self {
             slot_id,
             state: DeviceContextState::Blank,
+            initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper(Input32Byte::new_32byte()), // 0 filled
             device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
         }
@@ -207,7 +209,17 @@ impl DeviceContextInfo {
     }
 
     pub fn start_initialization(&mut self) {
-        todo!()
+        debug_assert_eq!(
+            self.initialization_state,
+            DeviceInitializationState::NotInitialized
+        );
+        self.initialization_state = DeviceInitializationState::Initialize1;
+        // self.get_descriptor(
+        //     EndpointId::default_control_pipe(),
+        //     descriptor_type,
+        //     descriptor_index,
+        // )
+        todo!("get descriptor")
     }
 }
 
@@ -229,6 +241,49 @@ impl EndpointId {
 
     pub fn address(&self) -> usize {
         self.address
+    }
+
+    pub const fn default_control_pipe() -> Self {
+        Self { address: 1 }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DeviceInitializationState {
+    NotInitialized,
+    Initialize1,
+    Initialize2,
+    Initialize3,
+    Initialized,
+}
+
+impl DeviceInitializationState {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::NotInitialized => Self::Initialize1,
+            Self::Initialize1 => Self::Initialize2,
+            Self::Initialize2 => Self::Initialize3,
+            Self::Initialize3 => Self::Initialized,
+            Self::Initialized => Self::Initialized,
+        }
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        match self {
+            Self::Initialized => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_initializing(&self) -> bool {
+        match self {
+            Self::NotInitialized | Self::Initialized => false,
+            _ => true,
+        }
+    }
+
+    pub fn advance(&mut self) {
+        *self = self.next();
     }
 }
 

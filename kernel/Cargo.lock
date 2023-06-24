@@ -58,6 +58,7 @@ dependencies = [
  "once_cell",
  "spin",
  "static_assertions",
+ "usb-host",
  "xhci",
 ]
 
@@ -187,6 +188,12 @@ name = "unicode-ident"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22049a19f4a68748a168c0fc439f9516686aa045927ff767eca0a85101fb6e73"
+
+[[package]]
+name = "usb-host"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22c6b75c8069a1adf9cc113273226e4ec40339a36f53e4b42594ddb9cc72b8f3"
 
 [[package]]
 name = "xhci"
