@@ -3,7 +3,7 @@ use core::panic;
 
 use alloc::vec;
 use alloc::{boxed::Box, vec::Vec};
-use xhci::context::{Device64Byte, Input64Byte};
+use xhci::context::{Device64Byte, Input64Byte, SlotHandler};
 use xhci::registers::operational::PortStatusAndControlRegister;
 
 use crate::alloc::alloc::{
@@ -138,6 +138,11 @@ impl DeviceContextInfo {
         slot_context.set_speed(port_speed);
     }
 
+    pub fn slot_context(&self) -> &dyn SlotHandler {
+        use xhci::context::InputHandler;
+        self.input_context.device().slot()
+    }
+
     pub fn initialize_endpoint0_context(
         &mut self,
         transfer_ring_dequeue_pointer: u64,
@@ -149,7 +154,7 @@ impl DeviceContextInfo {
         let endpoint0_context = self
             .input_context
             .device_mut()
-            .endpoint_mut(endpoint_context_0_id.address() - 1);
+            .endpoint_mut(endpoint_context_0_id.address());
 
         endpoint0_context.set_endpoint_type(EndpointType::Control);
         endpoint0_context.set_max_packet_size(max_packet_size);

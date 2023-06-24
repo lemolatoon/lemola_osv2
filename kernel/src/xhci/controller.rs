@@ -1,4 +1,4 @@
-use core::cmp;
+use core::{cmp, mem::MaybeUninit};
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -24,6 +24,7 @@ use crate::{
 use super::{
     device_manager::DeviceManager,
     port::{PortConfigPhase, PortConfigureState},
+    transfer_ring::TransferRing,
 };
 
 #[derive(Debug)]
@@ -37,6 +38,7 @@ where
     event_ring: EventRing,
     number_of_ports: u8,
     port_configure_state: PortConfigureState,
+    transfer_rings: [Option<Box<TransferRing>>; 31],
 }
 
 impl<M> XhciController<M>
@@ -123,6 +125,17 @@ where
 
         let port_configure_state = PortConfigureState::new();
 
+        const TRANSFER_RING_LEN: usize = 31;
+        let mut transfer_rings =
+            MaybeUninit::<[Option<Box<TransferRing>>; TRANSFER_RING_LEN]>::uninit();
+        let ptr = transfer_rings.as_mut_ptr() as *mut Option<Box<TransferRing>>;
+        let transfer_rings = unsafe {
+            for i in 0..TRANSFER_RING_LEN {
+                ptr.add(i).write(None);
+            }
+            transfer_rings.assume_init()
+        };
+
         Self {
             registers,
             device_manager,
@@ -130,6 +143,7 @@ where
             event_ring,
             number_of_ports,
             port_configure_state,
+            transfer_rings,
         }
     }
 
@@ -282,8 +296,30 @@ where
             .portsc;
         let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
         device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
-        device.initialize_endpoint0_context(todo!(), todo!());
+
+        let transfer_ring = TransferRing::alloc_new(32);
+        let transfer_ring_dequeue_pointer = &*transfer_ring as *const _ as u64;
+        debug_assert!(self.transfer_rings[endpoint_context_0_id.address() - 1].is_none());
+        self.transfer_rings[endpoint_context_0_id.address() - 1] = Some(transfer_ring);
+
+        log::debug!(
+            "transfer ring dequeue pointer: {:#x}",
+            transfer_ring_dequeue_pointer
+        );
+        let slot_context = device.slot_context();
+        let max_packet_size = Self::max_packet_size_for_control_pipe(slot_context.speed());
+
+        device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
+
         todo!();
+    }
+
+    pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
+        match slot_speed {
+            4 => 512, // SuperSpeed
+            3 => 64,  // HighSpeed
+            _ => 8,
+        }
     }
 
     pub fn is_port_connected_at(&self, port_index: usize) -> bool {
