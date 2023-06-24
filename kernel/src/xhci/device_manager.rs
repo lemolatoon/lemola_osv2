@@ -137,6 +137,30 @@ impl DeviceContextInfo {
         slot_context.set_context_entries(1);
         slot_context.set_speed(port_speed);
     }
+
+    pub fn initialize_endpoint0_context(
+        &mut self,
+        transfer_ring_dequeue_pointer: u64,
+        max_packet_size: u16,
+    ) {
+        use xhci::context::EndpointType;
+        use xhci::context::InputHandler;
+        let endpoint_context_0_id = EndpointId::new(0, false);
+        let endpoint0_context = self
+            .input_context
+            .device_mut()
+            .endpoint_mut(endpoint_context_0_id.address() - 1);
+
+        endpoint0_context.set_endpoint_type(EndpointType::Control);
+        endpoint0_context.set_max_packet_size(max_packet_size);
+        endpoint0_context.set_max_burst_size(0);
+        endpoint0_context.set_tr_dequeue_pointer(transfer_ring_dequeue_pointer);
+        endpoint0_context.set_dequeue_cycle_state();
+        endpoint0_context.set_interval(0);
+        endpoint0_context.set_max_primary_streams(0);
+        endpoint0_context.set_mult(0);
+        endpoint0_context.set_error_count(3);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,7 +170,12 @@ pub struct EndpointId {
 
 impl EndpointId {
     pub fn new(endpoint_number: usize, direct_in: bool) -> Self {
-        let address = endpoint_number * 2 + if direct_in { 1 } else { 0 };
+        let address = endpoint_number * 2
+            + if endpoint_number == 0 {
+                1
+            } else {
+                direct_in as usize
+            };
         Self { address }
     }
 

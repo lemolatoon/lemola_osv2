@@ -282,6 +282,7 @@ where
             .portsc;
         let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
         device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
+        device.initialize_endpoint0_context(todo!(), todo!());
         todo!();
     }
 
