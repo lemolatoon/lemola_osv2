@@ -30,6 +30,10 @@ impl PortConfigureState {
         self.port_config_phase[port_idx]
     }
 
+    pub fn set_port_phase_at(&mut self, port_idx: usize, phase: PortConfigPhase) {
+        self.port_config_phase[port_idx] = phase;
+    }
+
     pub fn addressing_port(&self) -> Option<usize> {
         self.addressing_port_index
     }

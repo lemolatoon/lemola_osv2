@@ -350,7 +350,21 @@ where
     }
 
     pub fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
-        todo!()
+        log::debug!(
+            "initialize device at: port_id: {}, slot_id: {}",
+            port_idx + 1,
+            slot_id
+        );
+
+        let Some(device) = self
+            .device_manager
+            .device_by_slot_id_mut(slot_id as usize) else {
+                log::error!("device not found for slot_id: {}", slot_id);
+                panic!("Invalid slot_id!");
+            };
+        self.port_configure_state
+            .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
+        device.start_initialization();
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {

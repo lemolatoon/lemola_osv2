@@ -205,6 +205,10 @@ impl DeviceContextInfo {
         endpoint0_context.set_mult(0);
         endpoint0_context.set_error_count(3);
     }
+
+    pub fn start_initialization(&mut self) {
+        todo!()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
