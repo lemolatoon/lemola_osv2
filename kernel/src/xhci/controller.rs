@@ -4,7 +4,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use xhci::{
     accessor::{array, Mapper},
-    context::{Endpoint, Endpoint64Byte, Slot64Byte},
+    context::{Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
     registers::PortRegisterSet,
     ring::trb::{self, event},
@@ -14,11 +14,8 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
-    serial_println,
-    xhci::{
-        command_ring::CommandRing, device_manager::EndpointId, event_ring::EventRing, port,
-        trb::TrbRaw,
-    },
+    usb::device::EndpointId,
+    xhci::{command_ring::CommandRing, event_ring::EventRing, port, trb::TrbRaw},
 };
 
 use super::{

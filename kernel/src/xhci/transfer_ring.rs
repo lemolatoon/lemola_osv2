@@ -7,7 +7,6 @@ use crate::alloc::alloc::{
 };
 use crate::memory::PAGE_SIZE;
 
-use super::device_manager::EndpointId;
 use super::trb::TrbRaw;
 
 #[derive(Debug)]
