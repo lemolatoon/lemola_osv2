@@ -14,7 +14,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
-    usb::device::EndpointId,
+    usb::device::{DeviceContextIndex, EndpointId},
     xhci::{command_ring::CommandRing, event_ring::EventRing, port, trb::TrbRaw},
 };
 
@@ -283,10 +283,10 @@ where
             port_index,
             slot_id
         );
-        let endpoint_context_0_id = EndpointId::new(0, false);
+        let ep0_dci = DeviceContextIndex::ep0();
         let device = self.device_manager.allocate_device(slot_id);
         device.enable_slot_context();
-        device.enable_endpoint(endpoint_context_0_id);
+        device.enable_endpoint(ep0_dci);
         let porttsc = self
             .port_register_sets()
             .read_volatile_at(port_index)
@@ -296,8 +296,8 @@ where
 
         let transfer_ring = TransferRing::alloc_new(32);
         let transfer_ring_dequeue_pointer = &*transfer_ring as *const _ as u64;
-        debug_assert!(self.transfer_rings[endpoint_context_0_id.address() - 1].is_none());
-        self.transfer_rings[endpoint_context_0_id.address() - 1] = Some(transfer_ring);
+        debug_assert!(self.transfer_rings[ep0_dci.address() as usize - 1].is_none());
+        self.transfer_rings[ep0_dci.address() as usize - 1] = Some(transfer_ring);
 
         log::debug!(
             "transfer ring dequeue pointer: {:#x}",
@@ -314,7 +314,7 @@ where
         let slot_context = device.slot_context();
         log::debug!("slot context: {:x?}", slot_context.as_ref());
         log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
-        let endpoint0_context = device.endpoint_context(endpoint_context_0_id);
+        let endpoint0_context = device.endpoint_context(ep0_dci);
         log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
         log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
 

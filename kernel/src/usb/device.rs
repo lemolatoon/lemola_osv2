@@ -1,3 +1,4 @@
+use usb_host::Endpoint;
 use xhci::context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler};
 
 #[derive(Debug, Clone)]
@@ -38,10 +39,10 @@ impl DeviceContextInfo {
         control.set_add_context_flag(0);
     }
 
-    pub fn enable_endpoint(&mut self, endpoint_id: EndpointId) {
+    pub fn enable_endpoint(&mut self, dci: DeviceContextIndex) {
         use xhci::context::InputHandler;
         let control = self.input_context.0.control_mut();
-        control.set_add_context_flag(endpoint_id.address());
+        control.set_add_context_flag(dci.address() as usize);
     }
 
     pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
@@ -59,20 +60,20 @@ impl DeviceContextInfo {
         self.input_context.0.device().slot()
     }
 
-    pub fn endpoint_context(&self, endpoint_id: EndpointId) -> &dyn EndpointHandler {
+    pub fn endpoint_context(&self, dci: DeviceContextIndex) -> &dyn EndpointHandler {
         use xhci::context::InputHandler;
         self.input_context
             .0
             .device()
-            .endpoint(endpoint_id.address())
+            .endpoint(dci.address() as usize)
     }
 
-    pub fn endpoint_context_mut(&mut self, endpoint_id: EndpointId) -> &mut dyn EndpointHandler {
+    pub fn endpoint_context_mut(&mut self, dci: DeviceContextIndex) -> &mut dyn EndpointHandler {
         use xhci::context::InputHandler;
         self.input_context
             .0
             .device_mut()
-            .endpoint_mut(endpoint_id.address())
+            .endpoint_mut(dci.address() as usize)
     }
 
     pub fn initialize_endpoint0_context(
@@ -82,12 +83,12 @@ impl DeviceContextInfo {
     ) {
         use xhci::context::EndpointType;
         use xhci::context::InputHandler;
-        let endpoint_context_0_id = EndpointId::new(0, false);
+        let endpoint_context_0_id = DeviceContextIndex::ep0();
         let endpoint0_context = self
             .input_context
             .0
             .device_mut()
-            .endpoint_mut(endpoint_context_0_id.address());
+            .endpoint_mut(endpoint_context_0_id.address() as usize);
 
         endpoint0_context.set_endpoint_type(EndpointType::Control);
         endpoint0_context.set_max_packet_size(max_packet_size);
@@ -115,28 +116,83 @@ impl DeviceContextInfo {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EndpointId {
-    address: usize,
+    endpoint_number: u8,
+    direct: usb_host::Direction,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Ord, PartialOrd, Eq)]
+pub struct DeviceContextIndex(u8);
+impl DeviceContextIndex {
+    pub const fn new(endpoint_number: u8, direct: usb_host::Direction) -> Self {
+        calc_dci(endpoint_number, direct)
+    }
+
+    pub const fn address(&self) -> u8 {
+        self.0
+    }
+
+    pub const fn ep0() -> Self {
+        Self(1)
+    }
+}
+
+pub const fn calc_dci(endpoint_number: u8, direct: usb_host::Direction) -> DeviceContextIndex {
+    let index = endpoint_number * 2 + if endpoint_number == 0 { 1 } else { 0 };
+    DeviceContextIndex(index)
 }
 
 impl EndpointId {
-    pub fn new(endpoint_number: usize, direct_in: bool) -> Self {
-        let address = endpoint_number * 2
-            + if endpoint_number == 0 {
-                1
-            } else {
-                direct_in as usize
-            };
-        Self { address }
-    }
-
-    pub fn address(&self) -> usize {
-        self.address
+    pub fn new(endpoint_number: u8, direct_in: usb_host::Direction) -> Self {
+        Self {
+            endpoint_number,
+            direct: direct_in,
+        }
     }
 
     pub const fn default_control_pipe() -> Self {
-        Self { address: 1 }
+        Self {
+            endpoint_number: 0,
+            direct: usb_host::Direction::Out, // actually default control pipe is IN/OUT
+        }
+    }
+}
+
+impl Endpoint for EndpointId {
+    fn address(&self) -> u8 {
+        calc_dci(self.endpoint_num(), self.direction()).address()
+    }
+
+    fn endpoint_num(&self) -> u8 {
+        self.endpoint_number
+    }
+
+    fn transfer_type(&self) -> usb_host::TransferType {
+        todo!()
+    }
+
+    fn direction(&self) -> usb_host::Direction {
+        self.direct
+    }
+
+    fn max_packet_size(&self) -> u16 {
+        todo!()
+    }
+
+    fn in_toggle(&self) -> bool {
+        todo!()
+    }
+
+    fn set_in_toggle(&mut self, toggle: bool) {
+        todo!()
+    }
+
+    fn out_toggle(&self) -> bool {
+        todo!()
+    }
+
+    fn set_out_toggle(&mut self, toggle: bool) {
+        todo!()
     }
 }
 
