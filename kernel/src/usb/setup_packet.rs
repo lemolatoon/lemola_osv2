@@ -1,7 +1,39 @@
-use usb_host::SetupPacket;
+use usb_host::{
+    DescriptorType, Endpoint, RequestCode, RequestDirection, RequestKind, RequestRecipient,
+    RequestType, SetupPacket,
+};
 
 #[derive(Clone, Debug, Copy)]
 pub struct SetupPacketWrapper(pub SetupPacket);
+
+impl From<SetupPacket> for SetupPacketWrapper {
+    fn from(setup_packet: SetupPacket) -> Self {
+        Self(setup_packet)
+    }
+}
+
+impl SetupPacketWrapper {
+    pub fn descriptor(descriptor_type: DescriptorType, descriptor_index: u8, len: u16) -> Self {
+        let bm_request_type = (
+            RequestDirection::HostToDevice,
+            RequestKind::Standard,
+            RequestRecipient::Device,
+        )
+            .into();
+        let b_request = RequestCode::GetDescriptor;
+        let w_value = (descriptor_index, descriptor_type as u8).into();
+        let w_index = 0;
+        let w_length = len;
+        let setup_packet = SetupPacket {
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            w_length,
+        };
+        setup_packet.into()
+    }
+}
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SetupPacketRaw {

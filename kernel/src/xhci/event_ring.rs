@@ -139,7 +139,7 @@ impl EventRing {
     pub fn pop<M: Mapper + Clone>(
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
-    ) -> event::Allowed {
+    ) -> Result<event::Allowed, TrbRaw> {
         let dequeue_pointer = interrupter
             .erdp
             .read_volatile()
@@ -163,6 +163,6 @@ impl EventRing {
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
         });
-        event::Allowed::try_from(popped.into_raw()).expect("unexpected trb")
+        event::Allowed::try_from(popped.into_raw()).map_err(TrbRaw::new_unchecked)
     }
 }

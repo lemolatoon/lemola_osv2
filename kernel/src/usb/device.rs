@@ -1,5 +1,14 @@
-use usb_host::Endpoint;
+extern crate alloc;
+use alloc::{
+    boxed::Box,
+    collections::{btree_map, BTreeMap},
+};
+use usb_host::{DescriptorType, DeviceDescriptor, Endpoint};
 use xhci::context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler};
+
+use crate::usb::setup_packet::SetupPacketWrapper;
+
+use super::class_driver::ClassDriver;
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
@@ -9,13 +18,15 @@ pub struct InputContextWrapper(Input32Byte);
 #[repr(align(64))]
 pub struct DeviceContextWrapper(pub Device32Byte);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeviceContextInfo {
     slot_id: usize,
     state: DeviceContextState,
     pub initialization_state: DeviceInitializationState,
     pub input_context: InputContextWrapper,
     pub device_context: DeviceContextWrapper,
+    pub buf: [u8; 256],
+    pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
 }
 
 impl DeviceContextInfo {
@@ -26,6 +37,8 @@ impl DeviceContextInfo {
             initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper(Input32Byte::new_32byte()), // 0 filled
             device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
+            buf: [0; 256],
+            event_waiting_issuer_map: BTreeMap::new(),
         }
     }
 
@@ -107,12 +120,44 @@ impl DeviceContextInfo {
             DeviceInitializationState::NotInitialized
         );
         self.initialization_state = DeviceInitializationState::Initialize1;
-        // self.get_descriptor(
-        //     EndpointId::default_control_pipe(),
-        //     descriptor_type,
-        //     descriptor_index,
-        // )
-        todo!("get descriptor")
+        self.get_descriptor(
+            EndpointId::default_control_pipe(),
+            DescriptorType::Device,
+            0,
+        );
+    }
+
+    pub fn buf_len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn get_descriptor(
+        &mut self,
+        endpoint_id: EndpointId,
+        descriptor_type: DescriptorType,
+        descriptor_index: u8,
+    ) {
+        let setup_data = SetupPacketWrapper::descriptor(
+            descriptor_type,
+            descriptor_index,
+            self.buf_len() as u16,
+        );
+        self.control_in(endpoint_id, setup_data, None);
+    }
+
+    pub fn control_in(
+        &mut self,
+        endpoint_id: EndpointId,
+        setup_data: SetupPacketWrapper,
+        issuer: Option<Box<dyn ClassDriver>>,
+    ) {
+        if let Some(issuer) = issuer {
+            let entry = self.event_waiting_issuer_map.entry(setup_data);
+            match entry {
+                btree_map::Entry::Vacant(entry) => entry.insert(issuer),
+                btree_map::Entry::Occupied(_) => panic!("same setup packet already issued"),
+            };
+        }
     }
 }
 

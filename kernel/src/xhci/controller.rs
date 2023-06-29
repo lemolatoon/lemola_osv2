@@ -2,6 +2,7 @@ use core::{cmp, mem::MaybeUninit};
 
 extern crate alloc;
 use alloc::boxed::Box;
+use usb_host::{SetupPacket, USBHost};
 use xhci::{
     accessor::{array, Mapper},
     context::{Endpoint64Byte, Slot64Byte},
@@ -167,10 +168,20 @@ where
             // EventRing does not have front
             return;
         }
-
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
         let mut primary_interrupter = primary_interrupter;
-        let event_trb = self.event_ring.pop(&mut primary_interrupter);
+        let trb = match self.event_ring.pop(&mut primary_interrupter) {
+            Ok(event_trb) => {
+                self.process_event_ring_event(event_trb);
+                return;
+            }
+            Err(raw) => raw,
+        };
+
+        todo!()
+    }
+
+    pub fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
         match event_trb {
             event::Allowed::TransferEvent(_) => todo!(),
             event::Allowed::CommandCompletion(command_completion) => {
@@ -618,5 +629,45 @@ where
             trb::command::Allowed::GetExtendedProperty(_) => todo!(),
             trb::command::Allowed::SetExtendedProperty(_) => todo!(),
         }
+    }
+}
+
+impl<M> USBHost for XhciController<M>
+where
+    M: Mapper + Clone,
+{
+    fn control_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
+        bm_request_type: usb_host::RequestType,
+        b_request: usb_host::RequestCode,
+        w_value: usb_host::WValue,
+        w_index: u16,
+        buf: Option<&mut [u8]>,
+    ) -> Result<usize, usb_host::TransferError> {
+        let setup_data = SetupPacket {
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            w_length: buf.map_or(0, |buf| buf.len() as u16),
+        };
+        todo!()
+    }
+
+    fn in_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
+        buf: &mut [u8],
+    ) -> Result<usize, usb_host::TransferError> {
+        todo!()
+    }
+
+    fn out_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
+        buf: &[u8],
+    ) -> Result<usize, usb_host::TransferError> {
+        todo!()
     }
 }

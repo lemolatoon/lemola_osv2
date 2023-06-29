@@ -97,7 +97,8 @@ impl DeviceContextArray {
             || 0 as *mut Device32Byte,
         )
         .expect("DeviceContextArray allocation failed");
-        let device_context_infos = vec![None; device_contexts_len];
+        let mut device_context_infos = Vec::with_capacity(device_contexts_len);
+        device_context_infos.resize_with(device_contexts_len, || None);
         Self {
             device_contexts,
             device_context_infos,
