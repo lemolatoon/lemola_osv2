@@ -5,7 +5,7 @@ use alloc::{
     boxed::Box,
     collections::{btree_map, BTreeMap},
 };
-use usb_host::{DescriptorType, DeviceDescriptor, Endpoint};
+use usb_host::{DescriptorType, DeviceDescriptor, Endpoint, USBHost};
 use xhci::context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler};
 
 use crate::{usb::setup_packet::SetupPacketWrapper, xhci::transfer_ring::TransferRing};
@@ -167,6 +167,36 @@ impl DeviceContextInfo {
                 btree_map::Entry::Occupied(_) => panic!("same setup packet already issued"),
             };
         }
+    }
+}
+
+impl USBHost for DeviceContextInfo {
+    fn control_transfer(
+        &mut self,
+        ep: &mut dyn Endpoint,
+        bm_request_type: usb_host::RequestType,
+        b_request: usb_host::RequestCode,
+        w_value: usb_host::WValue,
+        w_index: u16,
+        buf: Option<&mut [u8]>,
+    ) -> Result<usize, usb_host::TransferError> {
+        todo!()
+    }
+
+    fn in_transfer(
+        &mut self,
+        ep: &mut dyn Endpoint,
+        buf: &mut [u8],
+    ) -> Result<usize, usb_host::TransferError> {
+        todo!()
+    }
+
+    fn out_transfer(
+        &mut self,
+        ep: &mut dyn Endpoint,
+        buf: &[u8],
+    ) -> Result<usize, usb_host::TransferError> {
+        todo!()
     }
 }
 
