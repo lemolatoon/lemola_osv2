@@ -36,7 +36,6 @@ where
     event_ring: EventRing,
     number_of_ports: u8,
     port_configure_state: PortConfigureState,
-    transfer_rings: [Option<Box<TransferRing>>; 31],
 }
 
 impl<M> XhciController<M>
@@ -123,17 +122,6 @@ where
 
         let port_configure_state = PortConfigureState::new();
 
-        const TRANSFER_RING_LEN: usize = 31;
-        let mut transfer_rings =
-            MaybeUninit::<[Option<Box<TransferRing>>; TRANSFER_RING_LEN]>::uninit();
-        let ptr = transfer_rings.as_mut_ptr() as *mut Option<Box<TransferRing>>;
-        let transfer_rings = unsafe {
-            for i in 0..TRANSFER_RING_LEN {
-                ptr.add(i).write(None);
-            }
-            transfer_rings.assume_init()
-        };
-
         Self {
             registers,
             device_manager,
@@ -141,7 +129,6 @@ where
             event_ring,
             number_of_ports,
             port_configure_state,
-            transfer_rings,
         }
     }
 
@@ -305,10 +292,7 @@ where
         let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
         device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
 
-        let transfer_ring = TransferRing::alloc_new(32);
-        let transfer_ring_dequeue_pointer = &*transfer_ring as *const _ as u64;
-        debug_assert!(self.transfer_rings[ep0_dci.address() as usize - 1].is_none());
-        self.transfer_rings[ep0_dci.address() as usize - 1] = Some(transfer_ring);
+        let transfer_ring_dequeue_pointer = &*device.transfer_ring() as *const _ as u64;
 
         log::debug!(
             "transfer ring dequeue pointer: {:#x}",

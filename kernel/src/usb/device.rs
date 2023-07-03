@@ -1,4 +1,6 @@
 extern crate alloc;
+use core::pin::Pin;
+
 use alloc::{
     boxed::Box,
     collections::{btree_map, BTreeMap},
@@ -6,7 +8,7 @@ use alloc::{
 use usb_host::{DescriptorType, DeviceDescriptor, Endpoint};
 use xhci::context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler};
 
-use crate::usb::setup_packet::SetupPacketWrapper;
+use crate::{usb::setup_packet::SetupPacketWrapper, xhci::transfer_ring::TransferRing};
 
 use super::class_driver::ClassDriver;
 
@@ -27,10 +29,12 @@ pub struct DeviceContextInfo {
     pub device_context: DeviceContextWrapper,
     pub buf: [u8; 256],
     pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
+    transfer_ring: Pin<Box<TransferRing>>,
 }
 
 impl DeviceContextInfo {
     pub fn blank(slot_id: usize) -> Self {
+        const TRANSFER_RING_BUF_SIZE: usize = 32;
         Self {
             slot_id,
             state: DeviceContextState::Blank,
@@ -39,6 +43,7 @@ impl DeviceContextInfo {
             device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
             buf: [0; 256],
             event_waiting_issuer_map: BTreeMap::new(),
+            transfer_ring: Pin::new(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE)),
         }
     }
 
@@ -87,6 +92,10 @@ impl DeviceContextInfo {
             .0
             .device_mut()
             .endpoint_mut(dci.address() as usize)
+    }
+
+    pub fn transfer_ring(&self) -> &TransferRing {
+        &self.transfer_ring
     }
 
     pub fn initialize_endpoint0_context(
