@@ -179,8 +179,7 @@ where
     pub fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
-                log::debug!("{:?}", transfer_event);
-                todo!()
+                self.process_transfer_event(transfer_event);
             }
             event::Allowed::CommandCompletion(command_completion) => {
                 self.process_command_completion_event(command_completion)
@@ -634,6 +633,11 @@ where
             trb::command::Allowed::GetExtendedProperty(_) => todo!(),
             trb::command::Allowed::SetExtendedProperty(_) => todo!(),
         }
+    }
+
+    fn process_transfer_event(&mut self, event: trb::event::TransferEvent) {
+        log::debug!("TransferEvent received: {:?}", &event);
+        todo!()
     }
 }
 
