@@ -178,7 +178,10 @@ where
 
     pub fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
         match event_trb {
-            event::Allowed::TransferEvent(_) => todo!(),
+            event::Allowed::TransferEvent(transfer_event) => {
+                log::debug!("{:?}", transfer_event);
+                todo!()
+            }
             event::Allowed::CommandCompletion(command_completion) => {
                 self.process_command_completion_event(command_completion)
             }

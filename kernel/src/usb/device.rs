@@ -1,5 +1,5 @@
 extern crate alloc;
-use core::{mem::MaybeUninit, pin::Pin};
+use core::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use spin::Mutex;
@@ -35,7 +35,7 @@ pub struct DeviceContextInfo<M: Mapper + Clone> {
     pub initialization_state: DeviceInitializationState,
     pub input_context: InputContextWrapper,
     pub device_context: DeviceContextWrapper,
-    pub buf: Mutex<[u8; 256]>,
+    pub buf: [u8; 256],
     // pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
     transfer_rings: [Option<Box<TransferRing>>; 31],
     /// DataStageTRB | StatusStageTRB -> SetupStageTRB
@@ -64,7 +64,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper(Input32Byte::new_32byte()), // 0 filled
             device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
-            buf: Mutex::new([0; 256]),
+            buf: [0; 256],
             // event_waiting_issuer_map: BTreeMap::new(),
             transfer_rings,
             setup_stage_map: BTreeMap::new(),
@@ -168,7 +168,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
     }
 
     pub fn buf_len(&self) -> usize {
-        256
+        self.buf.len()
     }
 
     pub fn get_descriptor(
@@ -182,9 +182,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             descriptor_index,
             self.buf_len() as u16,
         );
-        let mut buf = [0; 256];
-        self.control_in(endpoint_id, setup_data, Some(&mut buf[..]), None);
-        self.buf.lock().copy_from_slice(&buf[..]);
+        let buf = &mut self.buf as *mut [u8]; // FIXME: use rusty way to pass this buffer
+        self.control_in(endpoint_id, setup_data, buf, None);
         log::debug!("end get_descriptor");
     }
 
@@ -193,7 +192,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         &mut self,
         endpoint_id: EndpointId,
         setup_data: SetupPacketWrapper,
-        buf: Option<&mut [u8]>,
+        buf: *mut [u8],
         issuer: Option<Box<dyn ClassDriver>>,
     ) {
         // if let Some(issuer) = issuer {
@@ -218,7 +217,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
         let setup_data = SetupPacketRaw::from(setup_data.0);
         let mut status_trb = transfer::StatusStage::new();
-        if let Some(buf) = buf {
+        if let Some(buf) = unsafe { buf.as_ref() } {
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
                 .set_request_type(setup_data.bm_request_type)
@@ -265,6 +264,11 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         }
 
         let mut registers = self.registers.lock();
+        log::debug!(
+            "slot_id: {:?}, dci.address(): {}",
+            self.slot_id,
+            dci.address()
+        );
         registers
             .doorbell
             .update_volatile_at(self.slot_id(), |ring| {

@@ -15,7 +15,7 @@ impl From<SetupPacket> for SetupPacketWrapper {
 impl SetupPacketWrapper {
     pub fn descriptor(descriptor_type: DescriptorType, descriptor_index: u8, len: u16) -> Self {
         let bm_request_type = (
-            RequestDirection::HostToDevice,
+            RequestDirection::DeviceToHost,
             RequestKind::Standard,
             RequestRecipient::Device,
         )
