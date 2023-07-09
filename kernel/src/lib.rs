@@ -2,6 +2,7 @@
 #![feature(ptr_alignment_type)]
 #![feature(const_option)]
 #![feature(new_uninit)]
+#![feature(maybe_uninit_uninit_array)]
 pub mod alloc;
 pub mod font;
 pub mod graphics;

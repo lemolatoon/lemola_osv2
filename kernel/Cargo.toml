@@ -14,6 +14,7 @@ log = "0.4.17"
 once_cell = { version = "1.17.1", default-features = false }
 spin = "0.9.8"
 static_assertions = "1.1.0"
+usb-device = "0.2.9"
 usb-host = "0.1.3"
 xhci = "0.9.1"
 

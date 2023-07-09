@@ -1,4 +1,5 @@
-use xhci::ring::trb;
+use static_assertions::assert_eq_size;
+use xhci::ring::trb::{self, transfer};
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
@@ -21,6 +22,11 @@ impl TrbRaw {
         for (dst, src) in self.0.iter_mut().zip(another.into_raw()) {
             *dst = src;
         }
+    }
+
+    pub unsafe fn as_setup_stage_mut(&mut self) -> &mut transfer::SetupStage {
+        assert_eq_size!(transfer::SetupStage, TrbRaw);
+        core::mem::transmute(self)
     }
 }
 

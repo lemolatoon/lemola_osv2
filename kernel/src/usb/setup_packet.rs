@@ -36,7 +36,7 @@ impl SetupPacketWrapper {
 }
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct SetupPacketRaw {
+pub struct SetupPacketRaw {
     pub bm_request_type: u8,
     pub b_request: u8,
     pub w_value: u16,

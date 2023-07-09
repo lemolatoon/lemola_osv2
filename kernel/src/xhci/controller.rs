@@ -1,7 +1,7 @@
-use core::{cmp, mem::MaybeUninit};
+use core::{borrow::BorrowMut, cmp, mem::MaybeUninit};
 
 extern crate alloc;
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use usb_host::{SetupPacket, USBHost};
 use xhci::{
     accessor::{array, Mapper},
@@ -18,6 +18,7 @@ use crate::{
     usb::device::{DeviceContextIndex, EndpointId},
     xhci::{command_ring::CommandRing, event_ring::EventRing, port, trb::TrbRaw},
 };
+use spin::{Mutex, MutexGuard};
 
 use super::{
     device_manager::DeviceManager,
@@ -30,8 +31,8 @@ pub struct XhciController<M>
 where
     M: Mapper + Clone,
 {
-    registers: xhci::Registers<M>,
-    device_manager: DeviceManager,
+    registers: Arc<Mutex<xhci::Registers<M>>>,
+    device_manager: DeviceManager<M>,
     command_ring: CommandRing,
     event_ring: EventRing,
     number_of_ports: u8,
@@ -94,8 +95,10 @@ where
         });
         Self::reset_controller(&mut registers);
         log::debug!("[XHCI] reset controller");
-        let device_manager = Self::configure_device_context(&mut registers);
+        let arc_registers = Arc::new(Mutex::new(registers));
+        let device_manager = Self::configure_device_context(&arc_registers);
         log::debug!("[XHCI] configure device context");
+        let mut registers = arc_registers.lock();
 
         const COMMAND_RING_BUF_SIZE: usize = 32;
         let command_ring = CommandRing::new(COMMAND_RING_BUF_SIZE);
@@ -122,8 +125,9 @@ where
 
         let port_configure_state = PortConfigureState::new();
 
+        drop(registers);
         Self {
-            registers,
+            registers: arc_registers,
             device_manager,
             command_ring,
             event_ring,
@@ -133,7 +137,8 @@ where
     }
 
     pub fn run(&mut self) {
-        let operational = &mut self.registers.operational;
+        let mut registers = self.registers.lock();
+        let operational = &mut registers.operational;
         operational.usbcmd.update_volatile(|usbcmd| {
             usbcmd.set_run_stop();
         });
@@ -143,7 +148,8 @@ where
     }
 
     pub fn process_event(&mut self) {
-        let primary_interrupter = self.registers.interrupter_register_set.interrupter_mut(0);
+        let mut registers = self.registers.lock();
+        let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
             (primary_interrupter
                 .erdp
@@ -157,7 +163,9 @@ where
         }
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
         let mut primary_interrupter = primary_interrupter;
-        let trb = match self.event_ring.pop(&mut primary_interrupter) {
+        let popped = self.event_ring.pop(&mut primary_interrupter);
+        drop(registers);
+        let trb = match popped {
             Ok(event_trb) => {
                 self.process_event_ring_event(event_trb);
                 return;
@@ -185,12 +193,12 @@ where
         }
     }
 
-    pub fn port_register_sets(&mut self) -> &mut array::ReadWrite<PortRegisterSet, M> {
-        &mut self.registers.port_register_set
-    }
-
     pub fn number_of_ports(&self) -> u8 {
         self.number_of_ports
+    }
+
+    pub fn registers(&self) -> MutexGuard<'_, xhci::Registers<M>> {
+        self.registers.lock()
     }
 
     pub fn configure_port_at(&mut self, port_idx: usize) {
@@ -227,14 +235,14 @@ where
                     "start clear connect status change and port reset port at: {}",
                     port_idx
                 );
-                self.port_register_sets()
-                    .update_volatile_at(port_idx, |port| {
-                        // actual reset operation of port
-                        port.portsc.clear_connect_status_change();
-                        port.portsc.set_port_reset();
-                    });
-                while self
-                    .port_register_sets()
+                let mut registers = self.registers.lock();
+                let port_register_sets = &mut registers.port_register_set;
+                port_register_sets.update_volatile_at(port_idx, |port| {
+                    // actual reset operation of port
+                    port.portsc.clear_connect_status_change();
+                    port.portsc.set_port_reset();
+                });
+                while port_register_sets
                     .read_volatile_at(port_idx)
                     .portsc
                     .port_reset()
@@ -245,7 +253,9 @@ where
     }
 
     pub fn enable_slot_at(&mut self, port_idx: usize) {
-        let port_reg_set = self.port_register_sets().read_volatile_at(port_idx);
+        let mut registers = self.registers.lock();
+        let port_register_sets = &mut registers.port_register_set;
+        let port_reg_set = port_register_sets.read_volatile_at(port_idx);
         let is_enabled = port_reg_set.portsc.port_enabled_disabled();
         let reset_completed = port_reg_set.portsc.connect_status_change();
 
@@ -256,19 +266,18 @@ where
         );
 
         if is_enabled && reset_completed {
-            self.port_register_sets()
-                .update_volatile_at(port_idx, |port_reg_set| {
-                    // clear port reset change
-                    port_reg_set.portsc.clear_port_reset_change();
-                    port_reg_set.portsc.set_0_port_reset_change();
-                });
+            port_register_sets.update_volatile_at(port_idx, |port_reg_set| {
+                // clear port reset change
+                port_reg_set.portsc.clear_port_reset_change();
+                port_reg_set.portsc.set_0_port_reset_change();
+            });
 
             self.port_configure_state.port_config_phase[port_idx] = PortConfigPhase::EnablingSlot;
 
             let enable_slot_cmd =
                 trb::command::Allowed::EnableSlot(trb::command::EnableSlot::new());
             self.command_ring.push(enable_slot_cmd);
-            self.registers.doorbell.update_volatile_at(0, |doorbell| {
+            registers.doorbell.update_volatile_at(0, |doorbell| {
                 doorbell.set_doorbell_target(0);
                 doorbell.set_doorbell_stream_id(0);
             })
@@ -285,14 +294,20 @@ where
         let device = self.device_manager.allocate_device(slot_id);
         device.enable_slot_context();
         device.enable_endpoint(ep0_dci);
-        let porttsc = self
-            .port_register_sets()
+
+        let mut registers = self.registers.lock();
+        let porttsc = registers
+            .port_register_set
             .read_volatile_at(port_index)
             .portsc;
         let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
         device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
 
-        let transfer_ring_dequeue_pointer = &*device.transfer_ring() as *const _ as u64;
+        let transfer_ring_dequeue_pointer = device
+            .transfer_ring_at(ep0_dci)
+            .as_ref()
+            .unwrap()
+            .buffer_ptr() as *const TrbRaw as u64;
 
         log::debug!(
             "transfer ring dequeue pointer: {:#x}",
@@ -335,7 +350,7 @@ where
         log::debug!("address device command: {:#x?}", address_device_command);
         let address_device_command = trb::command::Allowed::AddressDevice(address_device_command);
         self.command_ring.push(address_device_command);
-        self.registers.doorbell.update_volatile_at(0, |doorbell| {
+        registers.doorbell.update_volatile_at(0, |doorbell| {
             doorbell.set_doorbell_target(0);
             doorbell.set_doorbell_stream_id(0);
         })
@@ -369,6 +384,7 @@ where
 
     pub fn is_port_connected_at(&self, port_index: usize) -> bool {
         self.registers
+            .lock()
             .port_register_set
             .read_volatile_at(port_index)
             .portsc
@@ -395,7 +411,9 @@ where
         log::debug!("xHC is now ready.");
     }
 
-    fn configure_device_context(registers: &mut xhci::Registers<M>) -> DeviceManager {
+    fn configure_device_context(registers: &Arc<Mutex<xhci::Registers<M>>>) -> DeviceManager<M> {
+        let cloned_registers = Arc::clone(registers);
+        let registers = &mut *registers.lock();
         let capability = &registers.capability;
         let operational = &mut registers.operational;
         let max_slots = capability
@@ -409,7 +427,7 @@ where
             config.set_max_device_slots_enabled(max_device_slots_enabled);
         });
         log::debug!("max_device_slots_enabled: {}", max_device_slots_enabled);
-        let mut device_manager = DeviceManager::new(max_device_slots_enabled);
+        let mut device_manager = DeviceManager::new(max_device_slots_enabled, cloned_registers);
 
         // Allocate scratchpad_buffers on first pointer of DeviceContextArray
         let hcsparams2 = registers.capability.hcsparams2.read_volatile();

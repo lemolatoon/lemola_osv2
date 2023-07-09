@@ -52,7 +52,7 @@ impl TransferRing {
         self.cycle_bit = !self.cycle_bit;
     }
 
-    pub fn push(&mut self, mut cmd: transfer::Allowed) {
+    pub fn push(&mut self, mut cmd: transfer::Allowed) -> *mut TrbRaw {
         if self.cycle_bit {
             cmd.set_cycle_bit();
         } else {
@@ -60,7 +60,7 @@ impl TransferRing {
         }
         self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
         log::debug!(
-            "command ring trb ptr: {:p}",
+            "transfer ring trb ptr: {:p}",
             &self.trb_buffer[self.write_index]
         );
 
@@ -76,5 +76,8 @@ impl TransferRing {
             self.write_index = 0;
             self.toggle_cycle_bit();
         }
+
+        let trb_ref = &mut self.trb_buffer[self.write_index];
+        return trb_ref;
     }
 }

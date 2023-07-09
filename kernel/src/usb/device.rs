@@ -1,14 +1,21 @@
 extern crate alloc;
-use core::pin::Pin;
+use core::{mem::MaybeUninit, pin::Pin};
 
-use alloc::{
-    boxed::Box,
-    collections::{btree_map, BTreeMap},
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
+use spin::Mutex;
+use static_assertions::assert_eq_size_ptr;
+use usb_device::class_prelude::UsbBus;
+use usb_host::DescriptorType;
+use xhci::{
+    accessor::Mapper,
+    context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler},
+    ring::trb::transfer::{self, TransferType},
 };
-use usb_host::{DescriptorType, DeviceDescriptor, Endpoint, USBHost};
-use xhci::context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler};
 
-use crate::{usb::setup_packet::SetupPacketWrapper, xhci::transfer_ring::TransferRing};
+use crate::{
+    usb::setup_packet::{SetupPacketRaw, SetupPacketWrapper},
+    xhci::transfer_ring::TransferRing,
+};
 
 use super::class_driver::ClassDriver;
 
@@ -21,29 +28,46 @@ pub struct InputContextWrapper(Input32Byte);
 pub struct DeviceContextWrapper(pub Device32Byte);
 
 #[derive(Debug)]
-pub struct DeviceContextInfo {
+pub struct DeviceContextInfo<M: Mapper + Clone> {
+    registers: Arc<Mutex<xhci::Registers<M>>>,
     slot_id: usize,
     state: DeviceContextState,
     pub initialization_state: DeviceInitializationState,
     pub input_context: InputContextWrapper,
     pub device_context: DeviceContextWrapper,
-    pub buf: [u8; 256],
-    pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
-    transfer_ring: Pin<Box<TransferRing>>,
+    pub buf: Mutex<[u8; 256]>,
+    // pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
+    transfer_rings: [Option<Box<TransferRing>>; 31],
+    /// DataStageTRB | StatusStageTRB -> SetupStageTRB
+    setup_stage_map: BTreeMap<u64, u64>,
 }
 
-impl DeviceContextInfo {
-    pub fn blank(slot_id: usize) -> Self {
+impl<M: Mapper + Clone> DeviceContextInfo<M> {
+    pub fn blank(slot_id: usize, registers: Arc<Mutex<xhci::Registers<M>>>) -> Self {
         const TRANSFER_RING_BUF_SIZE: usize = 32;
+        let mut transfer_rings: [MaybeUninit<Option<Box<TransferRing>>>; 31] =
+            MaybeUninit::uninit_array();
+        for transfer_ring in transfer_rings.iter_mut() {
+            unsafe {
+                transfer_ring.as_mut_ptr().write(None);
+            }
+        }
+        let mut transfer_rings = unsafe {
+            // assume init
+            core::mem::transmute::<_, [Option<Box<TransferRing>>; 31]>(transfer_rings)
+        };
+        transfer_rings[0] = Some(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE));
         Self {
+            registers,
             slot_id,
             state: DeviceContextState::Blank,
             initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper(Input32Byte::new_32byte()), // 0 filled
             device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
-            buf: [0; 256],
-            event_waiting_issuer_map: BTreeMap::new(),
-            transfer_ring: Pin::new(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE)),
+            buf: Mutex::new([0; 256]),
+            // event_waiting_issuer_map: BTreeMap::new(),
+            transfer_rings,
+            setup_stage_map: BTreeMap::new(),
         }
     }
 
@@ -94,8 +118,15 @@ impl DeviceContextInfo {
             .endpoint_mut(dci.address() as usize)
     }
 
-    pub fn transfer_ring(&self) -> &TransferRing {
-        &self.transfer_ring
+    pub fn transfer_ring_at(&self, dci: DeviceContextIndex) -> &Option<Box<TransferRing>> {
+        &self.transfer_rings[dci.address() as usize - 1]
+    }
+
+    pub fn transfer_ring_at_mut(
+        &mut self,
+        dci: DeviceContextIndex,
+    ) -> &mut Option<Box<TransferRing>> {
+        &mut self.transfer_rings[dci.address() as usize - 1]
     }
 
     pub fn initialize_endpoint0_context(
@@ -137,7 +168,7 @@ impl DeviceContextInfo {
     }
 
     pub fn buf_len(&self) -> usize {
-        self.buf.len()
+        256
     }
 
     pub fn get_descriptor(
@@ -151,52 +182,95 @@ impl DeviceContextInfo {
             descriptor_index,
             self.buf_len() as u16,
         );
-        self.control_in(endpoint_id, setup_data, None);
+        let mut buf = [0; 256];
+        self.control_in(endpoint_id, setup_data, Some(&mut buf[..]), None);
+        self.buf.lock().copy_from_slice(&buf[..]);
+        log::debug!("end get_descriptor");
     }
 
+    /// Host to Device
     pub fn control_in(
         &mut self,
         endpoint_id: EndpointId,
         setup_data: SetupPacketWrapper,
+        buf: Option<&mut [u8]>,
         issuer: Option<Box<dyn ClassDriver>>,
     ) {
-        if let Some(issuer) = issuer {
-            let entry = self.event_waiting_issuer_map.entry(setup_data);
-            match entry {
-                btree_map::Entry::Vacant(entry) => entry.insert(issuer),
-                btree_map::Entry::Occupied(_) => panic!("same setup packet already issued"),
-            };
+        // if let Some(issuer) = issuer {
+        //     let entry = self.event_waiting_issuer_map.entry(setup_data);
+        //     match entry {
+        //         btree_map::Entry::Vacant(entry) => entry.insert(issuer),
+        //         btree_map::Entry::Occupied(_) => panic!("same setup packet already issued"),
+        //     };
+        // }
+        let dci: DeviceContextIndex = endpoint_id.address();
+        log::debug!(
+            "control_in: setup_data: {:?}, ep addr: {:?}",
+            &setup_data,
+            &dci
+        );
+
+        let transfer_ring = self
+            .transfer_ring_at_mut(dci)
+            .as_mut()
+            .expect("transfer ring not allocated")
+            .as_mut();
+
+        let setup_data = SetupPacketRaw::from(setup_data.0);
+        let mut status_trb = transfer::StatusStage::new();
+        if let Some(buf) = buf {
+            let mut setup_stage_trb = transfer::SetupStage::new();
+            setup_stage_trb
+                .set_request_type(setup_data.bm_request_type)
+                .set_request(setup_data.b_request)
+                .set_value(setup_data.w_value)
+                .set_index(setup_data.w_index)
+                .set_length(setup_data.w_length)
+                .set_transfer_type(TransferType::In);
+            let setup_trb_ref_in_ring =
+                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
+
+            let mut data_stage_trb = transfer::DataStage::new();
+            data_stage_trb
+                .set_trb_transfer_length(buf.len() as u32)
+                .set_data_buffer_pointer(buf.as_ptr() as u64)
+                .set_td_size(0)
+                .set_direction(transfer::Direction::In)
+                .set_interrupt_on_completion();
+
+            let data_trb_ref_in_ring =
+                transfer_ring.push(transfer::Allowed::DataStage(data_stage_trb)) as u64;
+
+            transfer_ring.push(transfer::Allowed::StatusStage(status_trb));
+            self.setup_stage_map
+                .insert(data_trb_ref_in_ring, setup_trb_ref_in_ring);
+        } else {
+            let mut setup_stage_trb = transfer::SetupStage::new();
+            setup_stage_trb
+                .set_request_type(setup_data.bm_request_type)
+                .set_request(setup_data.b_request)
+                .set_value(setup_data.w_value)
+                .set_index(setup_data.w_index)
+                .set_length(setup_data.w_length)
+                .set_transfer_type(TransferType::No);
+            let setup_trb_ref_in_ring =
+                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
+
+            status_trb.set_direction().set_interrupt_on_completion();
+            let status_trb_ref_in_ring =
+                transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64;
+
+            self.setup_stage_map
+                .insert(status_trb_ref_in_ring, setup_trb_ref_in_ring);
         }
-    }
-}
 
-impl USBHost for DeviceContextInfo {
-    fn control_transfer(
-        &mut self,
-        ep: &mut dyn Endpoint,
-        bm_request_type: usb_host::RequestType,
-        b_request: usb_host::RequestCode,
-        w_value: usb_host::WValue,
-        w_index: u16,
-        buf: Option<&mut [u8]>,
-    ) -> Result<usize, usb_host::TransferError> {
-        todo!()
-    }
-
-    fn in_transfer(
-        &mut self,
-        ep: &mut dyn Endpoint,
-        buf: &mut [u8],
-    ) -> Result<usize, usb_host::TransferError> {
-        todo!()
-    }
-
-    fn out_transfer(
-        &mut self,
-        ep: &mut dyn Endpoint,
-        buf: &[u8],
-    ) -> Result<usize, usb_host::TransferError> {
-        todo!()
+        let mut registers = self.registers.lock();
+        registers
+            .doorbell
+            .update_volatile_at(self.slot_id(), |ring| {
+                ring.set_doorbell_target(dci.address());
+                ring.set_doorbell_stream_id(0);
+            })
     }
 }
 
@@ -205,11 +279,18 @@ pub struct EndpointId {
     endpoint_number: u8,
     direct: usb_host::Direction,
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Ord, PartialOrd, Eq)]
 pub struct DeviceContextIndex(u8);
 impl DeviceContextIndex {
-    pub const fn new(endpoint_number: u8, direct: usb_host::Direction) -> Self {
-        calc_dci(endpoint_number, direct)
+    pub fn checked_new(dci: u8) -> Self {
+        assert!(dci < 32);
+        Self(dci)
+    }
+
+    pub fn new(endpoint_number: u8, direct: usb_host::Direction) -> Self {
+        let dci = calc_dci(endpoint_number, direct);
+        Self::checked_new(dci)
     }
 
     pub const fn address(&self) -> u8 {
@@ -221,17 +302,28 @@ impl DeviceContextIndex {
     }
 }
 
-pub const fn calc_dci(endpoint_number: u8, direct: usb_host::Direction) -> DeviceContextIndex {
+impl From<EndpointId> for DeviceContextIndex {
+    fn from(endpoint_id: EndpointId) -> Self {
+        Self::new(endpoint_id.endpoint_number, endpoint_id.direct)
+    }
+}
+
+pub const fn calc_dci(endpoint_number: u8, direct: usb_host::Direction) -> u8 {
     let index = endpoint_number * 2 + if endpoint_number == 0 { 1 } else { 0 };
-    DeviceContextIndex(index)
+    return index;
 }
 
 impl EndpointId {
     pub fn new(endpoint_number: u8, direct_in: usb_host::Direction) -> Self {
+        assert!(endpoint_number < 16);
         Self {
             endpoint_number,
             direct: direct_in,
         }
+    }
+
+    pub fn address(&self) -> DeviceContextIndex {
+        DeviceContextIndex(calc_dci(self.endpoint_number, self.direct))
     }
 
     pub const fn default_control_pipe() -> Self {
@@ -242,40 +334,63 @@ impl EndpointId {
     }
 }
 
-impl Endpoint for EndpointId {
-    fn address(&self) -> u8 {
-        calc_dci(self.endpoint_num(), self.direction()).address()
-    }
-
-    fn endpoint_num(&self) -> u8 {
-        self.endpoint_number
-    }
-
-    fn transfer_type(&self) -> usb_host::TransferType {
+impl<M: Mapper + Clone + Sync + Send> UsbBus for DeviceContextInfo<M> {
+    fn alloc_ep(
+        &mut self,
+        ep_dir: usb_device::UsbDirection,
+        ep_addr: Option<usb_device::endpoint::EndpointAddress>,
+        ep_type: usb_device::endpoint::EndpointType,
+        max_packet_size: u16,
+        interval: u8,
+    ) -> usb_device::Result<usb_device::endpoint::EndpointAddress> {
         todo!()
     }
 
-    fn direction(&self) -> usb_host::Direction {
-        self.direct
-    }
-
-    fn max_packet_size(&self) -> u16 {
+    fn enable(&mut self) {
         todo!()
     }
 
-    fn in_toggle(&self) -> bool {
+    fn reset(&self) {
         todo!()
     }
 
-    fn set_in_toggle(&mut self, toggle: bool) {
+    fn set_device_address(&self, addr: u8) {
         todo!()
     }
 
-    fn out_toggle(&self) -> bool {
+    fn write(
+        &self,
+        ep_addr: usb_device::endpoint::EndpointAddress,
+        buf: &[u8],
+    ) -> usb_device::Result<usize> {
         todo!()
     }
 
-    fn set_out_toggle(&mut self, toggle: bool) {
+    fn read(
+        &self,
+        ep_addr: usb_device::endpoint::EndpointAddress,
+        buf: &mut [u8],
+    ) -> usb_device::Result<usize> {
+        todo!()
+    }
+
+    fn set_stalled(&self, ep_addr: usb_device::endpoint::EndpointAddress, stalled: bool) {
+        todo!()
+    }
+
+    fn is_stalled(&self, ep_addr: usb_device::endpoint::EndpointAddress) -> bool {
+        todo!()
+    }
+
+    fn suspend(&self) {
+        todo!()
+    }
+
+    fn resume(&self) {
+        todo!()
+    }
+
+    fn poll(&self) -> usb_device::bus::PollResult {
         todo!()
     }
 }

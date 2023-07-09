@@ -1,26 +1,32 @@
 extern crate alloc;
 use core::panic;
 
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::{boxed::Box, vec::Vec};
+use spin::Mutex;
 use static_assertions::assert_eq_size;
+use xhci::accessor::Mapper;
 use xhci::context::{
     Device32Byte, Device64Byte, EndpointHandler, Input32Byte, Input64Byte, SlotHandler,
 };
 
 use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
 use crate::memory::PAGE_SIZE;
+use crate::pci::register;
 use crate::usb::device::DeviceContextInfo;
 
 #[derive(Debug)]
-pub struct DeviceManager {
+pub struct DeviceManager<M: Mapper + Clone> {
     /// len is max_slots_enabled
-    device_context_array: DeviceContextArray,
+    device_context_array: DeviceContextArray<M>,
+    registers: Arc<Mutex<xhci::Registers<M>>>,
 }
 
-impl DeviceManager {
-    pub fn new(max_slots: u8) -> Self {
+impl<M: Mapper + Clone> DeviceManager<M> {
+    pub fn new(max_slots: u8, registers: Arc<Mutex<xhci::Registers<M>>>) -> Self {
         Self {
+            registers,
             device_context_array: DeviceContextArray::new(max_slots),
         }
     }
@@ -35,7 +41,7 @@ impl DeviceManager {
         self.device_context_array.device_contexts.as_mut_ptr()
     }
 
-    pub fn allocate_device(&mut self, slot_id: usize) -> &mut DeviceContextInfo {
+    pub fn allocate_device(&mut self, slot_id: usize) -> &mut DeviceContextInfo<M> {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
                 "slot_id is out of range: {} / {}",
@@ -50,18 +56,19 @@ impl DeviceManager {
             panic!("device context at {} is already allocated", slot_id);
         }
 
+        let registers = Arc::clone(&self.registers);
         self.device_context_array.device_context_infos[slot_id] =
-            Some(DeviceContextInfo::blank(slot_id));
+            Some(DeviceContextInfo::blank(slot_id, registers));
         self.device_context_array.device_context_infos[slot_id]
             .as_mut()
             .unwrap()
     }
 
-    pub fn device_by_slot_id(&self, slot_id: usize) -> Option<&DeviceContextInfo> {
+    pub fn device_by_slot_id(&self, slot_id: usize) -> Option<&DeviceContextInfo<M>> {
         self.device_context_array.device_context_infos[slot_id].as_ref()
     }
 
-    pub fn device_by_slot_id_mut(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo> {
+    pub fn device_by_slot_id_mut(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo<M>> {
         self.device_context_array.device_context_infos[slot_id].as_mut()
     }
 
@@ -79,12 +86,12 @@ impl DeviceManager {
 }
 
 #[derive(Debug)]
-struct DeviceContextArray {
+struct DeviceContextArray<M: Mapper + Clone> {
     device_contexts: Box<[*mut Device32Byte]>,
-    device_context_infos: Vec<Option<DeviceContextInfo>>,
+    device_context_infos: Vec<Option<DeviceContextInfo<M>>>,
 }
 
-impl DeviceContextArray {
+impl<M: Mapper + Clone> DeviceContextArray<M> {
     pub fn new(max_slots: u8) -> Self {
         let device_contexts_len = max_slots as usize + 1;
         const ALIGNMENT: usize = 64;
