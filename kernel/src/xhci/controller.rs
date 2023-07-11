@@ -637,7 +637,31 @@ where
 
     fn process_transfer_event(&mut self, event: trb::event::TransferEvent) {
         log::debug!("TransferEvent received: {:?}", &event);
-        todo!()
+        match event.completion_code() {
+            Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
+            Ok(code) => {
+                log::error!("TransferEvent failed: {:?}", code);
+                panic!("TransferEvent failed: {:?}", code);
+            }
+            Err(code) => {
+                log::error!(
+                    "Invalid TransferEvent: {:?}, slot_id: {}",
+                    event,
+                    event.slot_id()
+                );
+                panic!(
+                    "Invalid TransferEvent: {:?}, slot_id: {}",
+                    event,
+                    event.slot_id()
+                );
+            }
+        };
+        let slot_id = event.slot_id();
+        let device = self
+            .device_manager
+            .device_by_slot_id_mut(slot_id as usize)
+            .unwrap();
+        device.on_transfer_event_received(event);
     }
 }
 

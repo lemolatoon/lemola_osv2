@@ -1,20 +1,22 @@
 extern crate alloc;
-use core::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
+use core::mem::MaybeUninit;
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use spin::Mutex;
 use static_assertions::assert_eq_size_ptr;
-use usb_device::class_prelude::UsbBus;
 use usb_host::DescriptorType;
 use xhci::{
     accessor::Mapper,
     context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler},
-    ring::trb::transfer::{self, TransferType},
+    ring::trb::{
+        event,
+        transfer::{self, TransferType},
+    },
 };
 
 use crate::{
     usb::setup_packet::{SetupPacketRaw, SetupPacketWrapper},
-    xhci::transfer_ring::TransferRing,
+    xhci::{transfer_ring::TransferRing, trb::TrbRaw},
 };
 
 use super::class_driver::ClassDriver;
@@ -276,6 +278,35 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                 ring.set_doorbell_stream_id(0);
             })
     }
+
+    pub fn on_transfer_event_received(&mut self, event: event::TransferEvent) {
+        let trb_pointer = event.trb_pointer();
+        let trb: transfer::Allowed = unsafe { (trb_pointer as *const TrbRaw).read() }
+            .try_into()
+            .unwrap();
+        match trb {
+            transfer::Allowed::Normal(_) => todo!("normal"),
+            transfer::Allowed::Isoch(_) => todo!("isoch"),
+            transfer::Allowed::Link(_) => todo!("link"),
+            transfer::Allowed::EventData(_) => todo!("event data"),
+            transfer::Allowed::Noop(_) => todo!("noop"),
+            transfer::Allowed::SetupStage(_) => todo!("setup stage"),
+            trb @ (transfer::Allowed::StatusStage(_) | transfer::Allowed::DataStage(_)) => {
+                let setup_trb_ref_in_ring = self
+                    .setup_stage_map
+                    .remove(&trb_pointer)
+                    .expect("setup stage trb not found");
+                let transfer::Allowed::SetupStage(setup_stage): transfer::Allowed =
+                    unsafe { (setup_trb_ref_in_ring as *const TrbRaw).read() }
+                        .try_into()
+                        .unwrap() else {
+                            log::error!("there must be setup stage. at {:?}", trb_pointer);
+                            panic!("there must be setup stage. at {:?}", trb_pointer);
+                        };
+            }
+        }
+        todo!()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -338,63 +369,32 @@ impl EndpointId {
     }
 }
 
-impl<M: Mapper + Clone + Sync + Send> UsbBus for DeviceContextInfo<M> {
-    fn alloc_ep(
+impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M> {
+    fn control_transfer(
         &mut self,
-        ep_dir: usb_device::UsbDirection,
-        ep_addr: Option<usb_device::endpoint::EndpointAddress>,
-        ep_type: usb_device::endpoint::EndpointType,
-        max_packet_size: u16,
-        interval: u8,
-    ) -> usb_device::Result<usb_device::endpoint::EndpointAddress> {
+        ep: &mut dyn usb_host::Endpoint,
+        bm_request_type: usb_host::RequestType,
+        b_request: usb_host::RequestCode,
+        w_value: usb_host::WValue,
+        w_index: u16,
+        buf: Option<&mut [u8]>,
+    ) -> Result<usize, usb_host::TransferError> {
         todo!()
     }
 
-    fn enable(&mut self) {
-        todo!()
-    }
-
-    fn reset(&self) {
-        todo!()
-    }
-
-    fn set_device_address(&self, addr: u8) {
-        todo!()
-    }
-
-    fn write(
-        &self,
-        ep_addr: usb_device::endpoint::EndpointAddress,
-        buf: &[u8],
-    ) -> usb_device::Result<usize> {
-        todo!()
-    }
-
-    fn read(
-        &self,
-        ep_addr: usb_device::endpoint::EndpointAddress,
+    fn in_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
         buf: &mut [u8],
-    ) -> usb_device::Result<usize> {
+    ) -> Result<usize, usb_host::TransferError> {
         todo!()
     }
 
-    fn set_stalled(&self, ep_addr: usb_device::endpoint::EndpointAddress, stalled: bool) {
-        todo!()
-    }
-
-    fn is_stalled(&self, ep_addr: usb_device::endpoint::EndpointAddress) -> bool {
-        todo!()
-    }
-
-    fn suspend(&self) {
-        todo!()
-    }
-
-    fn resume(&self) {
-        todo!()
-    }
-
-    fn poll(&self) -> usb_device::bus::PollResult {
+    fn out_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
+        buf: &[u8],
+    ) -> Result<usize, usb_host::TransferError> {
         todo!()
     }
 }
