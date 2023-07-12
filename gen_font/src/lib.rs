@@ -29,7 +29,9 @@ fn gen_font_impl() -> anyhow::Result<TokenStream2> {
         }
         if idx % 18 == 1 {
             let str_repr = line.split_whitespace().next().unwrap();
-            let Ok(char_code) = usize::from_str_radix(&str_repr[2..], 16) else {anyhow::bail!("failed to parse char code in `{}`", line)};
+            let Ok(char_code) = usize::from_str_radix(&str_repr[2..], 16) else {
+                anyhow::bail!("failed to parse char code in `{}`", line)
+            };
             current_char_code = char_code;
             continue;
         }
