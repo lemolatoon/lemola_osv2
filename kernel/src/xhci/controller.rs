@@ -16,7 +16,12 @@ use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
     usb::device::{DeviceContextIndex, EndpointId},
-    xhci::{command_ring::CommandRing, event_ring::EventRing, port, trb::TrbRaw},
+    xhci::{
+        command_ring::CommandRing,
+        event_ring::{self, EventRing},
+        port,
+        trb::TrbRaw,
+    },
 };
 use spin::{Mutex, MutexGuard};
 
@@ -34,7 +39,7 @@ where
     registers: Arc<Mutex<xhci::Registers<M>>>,
     device_manager: DeviceManager<M>,
     command_ring: CommandRing,
-    event_ring: EventRing,
+    event_ring: Arc<Mutex<EventRing>>,
     number_of_ports: u8,
     port_configure_state: PortConfigureState,
 }
@@ -95,8 +100,18 @@ where
         });
         Self::reset_controller(&mut registers);
         log::debug!("[XHCI] reset controller");
+
+        const EVENT_RING_BUF_SIZE: u16 = 32;
+        let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
+        let event_ring = Arc::new(Mutex::new(EventRing::new(
+            EVENT_RING_BUF_SIZE,
+            &mut primary_interrupter,
+        )));
+        log::debug!("[XHCI] initialize event ring");
+
         let arc_registers = Arc::new(Mutex::new(registers));
-        let device_manager = Self::configure_device_context(&arc_registers);
+        let device_manager =
+            Self::configure_device_context(&arc_registers, Arc::clone(&event_ring));
         log::debug!("[XHCI] configure device context");
         let mut registers = arc_registers.lock();
 
@@ -105,12 +120,8 @@ where
         Self::register_command_ring(&mut registers, &command_ring);
         log::debug!("[XHCI] register command ring");
 
-        const EVENT_RING_BUF_SIZE: u16 = 32;
-        let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
-        let event_ring = EventRing::new(EVENT_RING_BUF_SIZE, &mut primary_interrupter);
-        log::debug!("[XHCI] initialize event ring");
-
         // enable interrupt for the primary interrupter
+        let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
         primary_interrupter
             .iman
             .update_volatile(|interrupter_management_register| {
@@ -157,14 +168,16 @@ where
                 .event_ring_dequeue_pointer() as *const trb::Link)
                 .read_volatile()
         };
-        if event_ring_trb.cycle_bit() != self.event_ring.cycle_bit() {
+        let mut event_ring = self.event_ring.lock();
+        if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
             return;
         }
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
         let mut primary_interrupter = primary_interrupter;
-        let popped = self.event_ring.pop(&mut primary_interrupter);
+        let popped = event_ring.pop(&mut primary_interrupter);
         drop(registers);
+        drop(event_ring);
         let trb = match popped {
             Ok(event_trb) => {
                 self.process_event_ring_event(event_trb);
@@ -411,7 +424,10 @@ where
         log::debug!("xHC is now ready.");
     }
 
-    fn configure_device_context(registers: &Arc<Mutex<xhci::Registers<M>>>) -> DeviceManager<M> {
+    fn configure_device_context(
+        registers: &Arc<Mutex<xhci::Registers<M>>>,
+        event_ring: Arc<Mutex<EventRing>>,
+    ) -> DeviceManager<M> {
         let cloned_registers = Arc::clone(registers);
         let registers = &mut *registers.lock();
         let capability = &registers.capability;
@@ -427,7 +443,8 @@ where
             config.set_max_device_slots_enabled(max_device_slots_enabled);
         });
         log::debug!("max_device_slots_enabled: {}", max_device_slots_enabled);
-        let mut device_manager = DeviceManager::new(max_device_slots_enabled, cloned_registers);
+        let mut device_manager =
+            DeviceManager::new(max_device_slots_enabled, cloned_registers, event_ring);
 
         // Allocate scratchpad_buffers on first pointer of DeviceContextArray
         let hcsparams2 = registers.capability.hcsparams2.read_volatile();

@@ -16,18 +16,26 @@ use crate::memory::PAGE_SIZE;
 use crate::pci::register;
 use crate::usb::device::DeviceContextInfo;
 
+use super::event_ring::EventRing;
+
 #[derive(Debug)]
 pub struct DeviceManager<M: Mapper + Clone> {
     /// len is max_slots_enabled
     device_context_array: DeviceContextArray<M>,
     registers: Arc<Mutex<xhci::Registers<M>>>,
+    event_ring: Arc<Mutex<EventRing>>,
 }
 
 impl<M: Mapper + Clone> DeviceManager<M> {
-    pub fn new(max_slots: u8, registers: Arc<Mutex<xhci::Registers<M>>>) -> Self {
+    pub fn new(
+        max_slots: u8,
+        registers: Arc<Mutex<xhci::Registers<M>>>,
+        event_ring: Arc<Mutex<EventRing>>,
+    ) -> Self {
         Self {
             registers,
             device_context_array: DeviceContextArray::new(max_slots),
+            event_ring,
         }
     }
 
@@ -57,8 +65,9 @@ impl<M: Mapper + Clone> DeviceManager<M> {
         }
 
         let registers = Arc::clone(&self.registers);
+        let event_ring = Arc::clone(&self.event_ring);
         self.device_context_array.device_context_infos[slot_id] =
-            Some(DeviceContextInfo::blank(slot_id, registers));
+            Some(DeviceContextInfo::blank(slot_id, registers, event_ring));
         self.device_context_array.device_context_infos[slot_id]
             .as_mut()
             .unwrap()

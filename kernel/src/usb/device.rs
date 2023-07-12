@@ -17,6 +17,7 @@ use xhci::{
 use crate::{
     usb::setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     xhci::{
+        event_ring::EventRing,
         transfer_ring::TransferRing,
         trb::{self, TrbRaw},
     },
@@ -35,6 +36,7 @@ pub struct DeviceContextWrapper(pub Device32Byte);
 #[derive(Debug)]
 pub struct DeviceContextInfo<M: Mapper + Clone> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
+    event_ring: Arc<Mutex<EventRing>>,
     slot_id: usize,
     state: DeviceContextState,
     pub initialization_state: DeviceInitializationState,
@@ -48,7 +50,11 @@ pub struct DeviceContextInfo<M: Mapper + Clone> {
 }
 
 impl<M: Mapper + Clone> DeviceContextInfo<M> {
-    pub fn blank(slot_id: usize, registers: Arc<Mutex<xhci::Registers<M>>>) -> Self {
+    pub fn blank(
+        slot_id: usize,
+        registers: Arc<Mutex<xhci::Registers<M>>>,
+        event_ring: Arc<Mutex<EventRing>>,
+    ) -> Self {
         const TRANSFER_RING_BUF_SIZE: usize = 32;
         let mut transfer_rings: [MaybeUninit<Option<Box<TransferRing>>>; 31] =
             MaybeUninit::uninit_array();
@@ -64,6 +70,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         transfer_rings[0] = Some(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE));
         Self {
             registers,
+            event_ring,
             slot_id,
             state: DeviceContextState::Blank,
             initialization_state: DeviceInitializationState::NotInitialized,
