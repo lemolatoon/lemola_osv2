@@ -12,6 +12,11 @@ default = []
 [dependencies]
 gen_font = { path = "../gen_font" }
 common = { path = "../common" }
-log = "0.4.17"
-once_cell = { version = "1.17.1", default-features = false }
+dummy-waker = "1.1.0"
 spin = "0.9.8"
+once_cell = { version = "1.18.0", default-features = false }
+log = "0.4.19"
+
+[dev-dependencies]
+rand = "0.8.5"
+proc-macro2 = "1.0.64"
