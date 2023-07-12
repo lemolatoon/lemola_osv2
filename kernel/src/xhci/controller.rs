@@ -365,12 +365,10 @@ where
             slot_id
         );
 
-        let Some(device) = self
-            .device_manager
-            .device_by_slot_id_mut(slot_id as usize) else {
-                log::error!("device not found for slot_id: {}", slot_id);
-                panic!("Invalid slot_id!");
-            };
+        let Some(device) = self.device_manager.device_by_slot_id_mut(slot_id as usize) else {
+            log::error!("device not found for slot_id: {}", slot_id);
+            panic!("Invalid slot_id!");
+        };
         self.port_configure_state
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
         device.start_initialization();
@@ -536,7 +534,12 @@ where
 
     fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
         let slot_id = event.slot_id();
-        let Ok(completion_code) = event.completion_code() else { log::error!("Invalid CommandCompletionEvent: {:?}, slot_id: {}", event, slot_id);
+        let Ok(completion_code) = event.completion_code() else {
+            log::error!(
+                "Invalid CommandCompletionEvent: {:?}, slot_id: {}",
+                event,
+                slot_id
+            );
             return;
         };
 
@@ -553,7 +556,11 @@ where
         let trb_raw =
             unsafe { TrbRaw::new_from_ptr(event.command_trb_pointer() as *const [u32; 4]) };
         let Ok(command_trb) = trb::command::Allowed::try_from(trb_raw) else {
-            log::error!("Failed to parse CommandCompletionEvent: {:?}, slot_id: {}", event, slot_id);
+            log::error!(
+                "Failed to parse CommandCompletionEvent: {:?}, slot_id: {}",
+                event,
+                slot_id
+            );
             return;
         };
 
@@ -566,8 +573,12 @@ where
         match command_trb {
             trb::command::Allowed::Link(_) => todo!(),
             trb::command::Allowed::EnableSlot(enable_slot) => {
-                let Some(addressing_port_phase) = self.port_configure_state.addressing_port_phase() else {
-                    log::error!("No addressing port: {:?}", self.port_configure_state.addressing_port_index);
+                let Some(addressing_port_phase) = self.port_configure_state.addressing_port_phase()
+                else {
+                    log::error!(
+                        "No addressing port: {:?}",
+                        self.port_configure_state.addressing_port_index
+                    );
                     panic!("InvalidPhase");
                 };
                 if addressing_port_phase != PortConfigPhase::EnablingSlot {

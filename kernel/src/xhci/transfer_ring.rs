@@ -64,6 +64,7 @@ impl TransferRing {
             &self.trb_buffer[self.write_index]
         );
 
+        let trb_ptr = &mut self.trb_buffer[self.write_index] as *mut TrbRaw;
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
             log::debug!("end of the ring");
@@ -77,7 +78,6 @@ impl TransferRing {
             self.toggle_cycle_bit();
         }
 
-        let trb_ref = &mut self.trb_buffer[self.write_index];
-        return trb_ref;
+        return trb_ptr;
     }
 }

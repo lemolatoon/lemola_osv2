@@ -16,7 +16,10 @@ use xhci::{
 
 use crate::{
     usb::setup_packet::{SetupPacketRaw, SetupPacketWrapper},
-    xhci::{transfer_ring::TransferRing, trb::TrbRaw},
+    xhci::{
+        transfer_ring::TransferRing,
+        trb::{self, TrbRaw},
+    },
 };
 
 use super::class_driver::ClassDriver;
@@ -243,6 +246,11 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                 transfer_ring.push(transfer::Allowed::DataStage(data_stage_trb)) as u64;
 
             transfer_ring.push(transfer::Allowed::StatusStage(status_trb));
+            log::debug!(
+                "control_in: setup_trb_ref_in_ring: {:?}, data_trb_ref_in_ring: {:?}",
+                setup_trb_ref_in_ring,
+                data_trb_ref_in_ring
+            );
             self.setup_stage_map
                 .insert(data_trb_ref_in_ring, setup_trb_ref_in_ring);
         } else {
@@ -281,6 +289,10 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
     pub fn on_transfer_event_received(&mut self, event: event::TransferEvent) {
         let trb_pointer = event.trb_pointer();
+        if trb_pointer == 0 {
+            log::debug!("Invalid trb_pointer: null");
+            return;
+        }
         let trb: transfer::Allowed = unsafe { (trb_pointer as *const TrbRaw).read() }
             .try_into()
             .unwrap();
@@ -291,18 +303,24 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             transfer::Allowed::EventData(_) => todo!("event data"),
             transfer::Allowed::Noop(_) => todo!("noop"),
             transfer::Allowed::SetupStage(_) => todo!("setup stage"),
-            trb @ (transfer::Allowed::StatusStage(_) | transfer::Allowed::DataStage(_)) => {
-                let setup_trb_ref_in_ring = self
-                    .setup_stage_map
-                    .remove(&trb_pointer)
-                    .expect("setup stage trb not found");
-                let transfer::Allowed::SetupStage(setup_stage): transfer::Allowed =
-                    unsafe { (setup_trb_ref_in_ring as *const TrbRaw).read() }
-                        .try_into()
-                        .unwrap() else {
-                            log::error!("there must be setup stage. at {:?}", trb_pointer);
-                            panic!("there must be setup stage. at {:?}", trb_pointer);
-                        };
+            transfer::Allowed::StatusStage(_) | transfer::Allowed::DataStage(_) => {
+                log::debug!("setup_stage_map: {:?}", &self.setup_stage_map);
+                let setup_stage = {
+                    let setup_trb_ref_in_ring = self
+                        .setup_stage_map
+                        .remove(&trb_pointer)
+                        .expect("setup stage trb not found")
+                        as *const TrbRaw;
+                    let transfer::Allowed::SetupStage(setup_stage): transfer::Allowed =
+                        unsafe { setup_trb_ref_in_ring.read() }.try_into().unwrap()
+                    else {
+                        log::error!("there must be setup stage. at {:?}", trb_pointer);
+                        panic!("there must be setup stage. at {:?}", trb_pointer);
+                    };
+                    setup_stage
+                };
+
+                log::debug!("setup_stage: {:?}", setup_stage);
             }
         }
         todo!()
