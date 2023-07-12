@@ -12,8 +12,10 @@ jobs:
         # https://github.com/dtolnay/rust-toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2023-05-28
+          toolchain: nightly
           components: rustfmt, clippy
+      - name: setup
+        run: rustup component add rust-src --toolchain nightly-2023-07-11-x86_64-unknown-linux-gnu
       - name: Run check
         run: make check
       - name: Run rustfmt
