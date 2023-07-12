@@ -1,13 +1,12 @@
-use core::{borrow::BorrowMut, cmp, mem::MaybeUninit};
+use core::cmp;
 
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
 use usb_host::{SetupPacket, USBHost};
 use xhci::{
-    accessor::{array, Mapper},
+    accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
-    registers::PortRegisterSet,
     ring::trb::{self, event},
     ExtendedCapability,
 };
@@ -15,20 +14,14 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
     memory::PAGE_SIZE,
-    usb::device::{DeviceContextIndex, EndpointId},
-    xhci::{
-        command_ring::CommandRing,
-        event_ring::{self, EventRing},
-        port,
-        trb::TrbRaw,
-    },
+    usb::device::DeviceContextIndex,
+    xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
 use spin::{Mutex, MutexGuard};
 
 use super::{
     device_manager::DeviceManager,
     port::{PortConfigPhase, PortConfigureState},
-    transfer_ring::TransferRing,
 };
 
 #[derive(Debug)]
@@ -109,6 +102,8 @@ where
         )));
         log::debug!("[XHCI] initialize event ring");
 
+        // This is clippy's bug
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc_registers = Arc::new(Mutex::new(registers));
         let device_manager =
             Self::configure_device_context(&arc_registers, Arc::clone(&event_ring));
@@ -174,11 +169,11 @@ where
             return;
         }
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
-        let mut primary_interrupter = primary_interrupter;
-        let popped = event_ring.pop(&mut primary_interrupter);
+        let primary_interrupter = primary_interrupter;
+        let popped = event_ring.pop(primary_interrupter);
         drop(registers);
         drop(event_ring);
-        let trb = match popped {
+        let _trb = match popped {
             Ok(event_trb) => {
                 self.process_event_ring_event(event_trb);
                 return;
@@ -589,7 +584,7 @@ where
 
         match command_trb {
             trb::command::Allowed::Link(_) => todo!(),
-            trb::command::Allowed::EnableSlot(enable_slot) => {
+            trb::command::Allowed::EnableSlot(_enable_slot) => {
                 let Some(addressing_port_phase) = self.port_configure_state.addressing_port_phase()
                 else {
                     log::error!(
@@ -673,9 +668,10 @@ where
             }
             Err(code) => {
                 log::error!(
-                    "Invalid TransferEvent: {:?}, slot_id: {}",
+                    "Invalid TransferEvent: {:?}, slot_id: {}, code: {:?}",
                     event,
-                    event.slot_id()
+                    event.slot_id(),
+                    code
                 );
                 panic!(
                     "Invalid TransferEvent: {:?}, slot_id: {}",

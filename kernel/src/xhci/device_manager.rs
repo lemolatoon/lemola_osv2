@@ -2,18 +2,13 @@ extern crate alloc;
 use core::panic;
 
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::{boxed::Box, vec::Vec};
 use spin::Mutex;
-use static_assertions::assert_eq_size;
 use xhci::accessor::Mapper;
-use xhci::context::{
-    Device32Byte, Device64Byte, EndpointHandler, Input32Byte, Input64Byte, SlotHandler,
-};
+use xhci::context::Device32Byte;
 
 use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
 use crate::memory::PAGE_SIZE;
-use crate::pci::register;
 use crate::usb::device::DeviceContextInfo;
 
 use super::event_ring::EventRing;

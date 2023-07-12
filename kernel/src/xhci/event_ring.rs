@@ -32,7 +32,7 @@ impl EventRingSegmentTableEntry {
         entry
     }
     pub fn ring_segment_base_address(&self) -> u64 {
-        ((self.data[1] as u64) << 32) | (self.data[0] & 0xffff_ffff) as u64
+        ((self.data[1] as u64) << 32) | self.data[0] as u64
     }
 
     pub fn set_ring_segment_base_address(&mut self, address: u64) {

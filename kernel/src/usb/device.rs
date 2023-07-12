@@ -3,7 +3,6 @@ use core::mem::MaybeUninit;
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use spin::Mutex;
-use static_assertions::assert_eq_size_ptr;
 use usb_host::DescriptorType;
 use xhci::{
     accessor::Mapper,
@@ -369,8 +368,7 @@ impl From<EndpointId> for DeviceContextIndex {
 }
 
 pub const fn calc_dci(endpoint_number: u8, direct: usb_host::Direction) -> u8 {
-    let index = endpoint_number * 2 + if endpoint_number == 0 { 1 } else { 0 };
-    return index;
+    endpoint_number * 2 + if endpoint_number == 0 { 1 } else { 0 }
 }
 
 impl EndpointId {
@@ -445,17 +443,11 @@ impl DeviceInitializationState {
     }
 
     pub fn is_initialized(&self) -> bool {
-        match self {
-            Self::Initialized => true,
-            _ => false,
-        }
+        matches!(self, Self::Initialized)
     }
 
     pub fn is_initializing(&self) -> bool {
-        match self {
-            Self::NotInitialized | Self::Initialized => false,
-            _ => true,
-        }
+        !matches!(self, Self::NotInitialized | Self::Initialized)
     }
 
     pub fn advance(&mut self) {

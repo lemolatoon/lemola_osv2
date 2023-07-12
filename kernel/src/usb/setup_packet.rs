@@ -1,6 +1,5 @@
 use usb_host::{
-    DescriptorType, Endpoint, RequestCode, RequestDirection, RequestKind, RequestRecipient,
-    RequestType, SetupPacket,
+    DescriptorType, RequestCode, RequestDirection, RequestKind, RequestRecipient, SetupPacket,
 };
 
 #[derive(Clone, Debug, Copy)]

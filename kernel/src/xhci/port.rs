@@ -18,6 +18,10 @@ impl PortConfigureState {
         self.port_config_phase.len()
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.port_config_phase.is_empty()
+    }
+
     pub fn clear_addressing_port_index(&mut self) {
         self.addressing_port_index = None;
     }
@@ -44,8 +48,9 @@ impl PortConfigureState {
     }
 
     pub fn set_addressing_port_phase(&mut self, phase: PortConfigPhase) {
-        self.addressing_port_index
-            .map(|idx| self.port_config_phase[idx] = phase);
+        if let Some(idx) = self.addressing_port_index {
+            self.port_config_phase[idx] = phase;
+        }
     }
 
     pub fn start_configuration_at(&mut self, port_idx: usize) {

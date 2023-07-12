@@ -36,12 +36,9 @@ impl TransferRing {
     pub fn alloc_new(buf_size: usize) -> Box<Self> {
         const RING_ALIGNMENT: usize = 64;
         const RING_BOUNDARY: usize = PAGE_SIZE;
-        let transfer_ring =
-            alloc_with_boundary_with_default_else(RING_ALIGNMENT, RING_BOUNDARY, || {
-                Self::new(buf_size)
-            })
-            .unwrap();
-        transfer_ring
+
+        alloc_with_boundary_with_default_else(RING_ALIGNMENT, RING_BOUNDARY, || Self::new(buf_size))
+            .unwrap()
     }
 
     pub fn buffer_ptr(&self) -> *const [TrbRaw] {
@@ -78,6 +75,6 @@ impl TransferRing {
             self.toggle_cycle_bit();
         }
 
-        return trb_ptr;
+        trb_ptr
     }
 }
