@@ -3,6 +3,7 @@
 #![feature(const_option)]
 #![feature(new_uninit)]
 #![feature(maybe_uninit_uninit_array)]
+#![feature(adt_const_params)]
 pub mod alloc;
 pub mod font;
 pub mod graphics;
