@@ -181,6 +181,40 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         log::debug!("device_descriptor: {:?}", device_descriptor);
         let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
+        if device_descriptor.b_device_class == 0 {
+            let mut book_keyboard_interface = None;
+            let mut mouse_interface = None;
+            for desc in descriptors {
+                if let Descriptor::Interface(interface) = desc {
+                    match (
+                        interface.b_interface_class,
+                        interface.b_interface_sub_class,
+                        interface.b_interface_protocol,
+                    ) {
+                        (3, 1, 1) => {
+                            log::debug!("HID boot keyboard interface found");
+                            book_keyboard_interface = Some(interface);
+                        }
+                        (3, 1, 2) => {
+                            log::debug!("HID mouse interface found");
+                            mouse_interface = Some(interface);
+                        }
+                        unknown => {
+                            log::debug!("unknown interface found: {:?}", unknown);
+                        }
+                    };
+                }
+            }
+            if book_keyboard_interface.is_none() {
+                log::warn!("no book keyboard interface found");
+            }
+
+            if mouse_interface.is_none() {
+                log::warn!("no mouse interface found");
+            }
+        } else {
+            log::warn!("unknown device class: {}", device_descriptor.b_device_class);
+        }
         todo!()
     }
 

@@ -14,7 +14,7 @@ impl<'a> DescriptorIter<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub enum Descriptor {
     Configuration(ConfigurationDescriptor),
     Interface(InterfaceDescriptor),
