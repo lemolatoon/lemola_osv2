@@ -168,15 +168,16 @@ impl EventRing {
         });
         event::Allowed::try_from(popped.into_raw()).map_err(TrbRaw::new_unchecked)
     }
-    
-    pub async fn get_received_transer_trb<M: Mapper + Clone>(
+
+    pub async fn get_received_transfer_trb<M: Mapper + Clone>(
         event_ring: Arc<Mutex<EventRing>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> trb::event::TransferEvent {
         TransferEventFuture {
             event_ring,
-            interrupter
-        }.await
+            interrupter,
+        }
+        .await
     }
 }
 
@@ -188,11 +189,14 @@ struct TransferEventFuture<'a, 'b, M: Mapper + Clone> {
 impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
     type Output = trb::event::TransferEvent;
 
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
         // FIXME: this is safe because called member methods does not move them, but their must be a better way
         let Self {
             interrupter,
-            event_ring
+            event_ring,
         } = unsafe { self.get_unchecked_mut() };
         let event_ring_trb = unsafe {
             (interrupter

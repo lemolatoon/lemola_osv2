@@ -1,9 +1,10 @@
 extern crate alloc;
-use core::mem::MaybeUninit;
+use core::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
+use kernel_lib::await_sync;
 use spin::Mutex;
-use usb_host::DescriptorType;
+use usb_host::{DescriptorType, DeviceDescriptor, SetupPacket};
 use xhci::{
     accessor::Mapper,
     context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler},
@@ -14,7 +15,10 @@ use xhci::{
 };
 
 use crate::{
-    usb::setup_packet::{SetupPacketRaw, SetupPacketWrapper},
+    usb::{
+        device,
+        setup_packet::{SetupPacketRaw, SetupPacketWrapper},
+    },
     xhci::{
         event_ring::EventRing,
         transfer_ring::TransferRing,
@@ -154,6 +158,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             .device_mut()
             .endpoint_mut(endpoint_context_0_id.address() as usize);
 
+        log::debug!("max_packet_size: {}", max_packet_size);
         endpoint0_context.set_endpoint_type(EndpointType::Control);
         endpoint0_context.set_max_packet_size(max_packet_size);
         endpoint0_context.set_max_burst_size(0);
@@ -171,48 +176,21 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             DeviceInitializationState::NotInitialized
         );
         self.initialization_state = DeviceInitializationState::Initialize1;
-        self.get_descriptor(
-            EndpointId::default_control_pipe(),
-            DescriptorType::Device,
-            0,
-        );
+        let device_descriptor = await_sync!(self.request_device_descriptor());
+        log::debug!("device_descriptor: {:?}", device_descriptor);
     }
 
     pub fn buf_len(&self) -> usize {
         self.buf.len()
     }
 
-    pub fn get_descriptor(
-        &mut self,
-        endpoint_id: EndpointId,
-        descriptor_type: DescriptorType,
-        descriptor_index: u8,
-    ) {
-        let setup_data = SetupPacketWrapper::descriptor(
-            descriptor_type,
-            descriptor_index,
-            self.buf_len() as u16,
-        );
-        let buf = &mut self.buf as *mut [u8]; // FIXME: use rusty way to pass this buffer
-        self.control_in(endpoint_id, setup_data, buf, None);
-        log::debug!("end get_descriptor");
-    }
-
     /// Host to Device
-    pub fn control_in(
+    pub fn push_control_transfer(
         &mut self,
         endpoint_id: EndpointId,
         setup_data: SetupPacketWrapper,
-        buf: *mut [u8],
-        issuer: Option<Box<dyn ClassDriver>>,
+        buf: Option<NonNull<[u8]>>,
     ) {
-        // if let Some(issuer) = issuer {
-        //     let entry = self.event_waiting_issuer_map.entry(setup_data);
-        //     match entry {
-        //         btree_map::Entry::Vacant(entry) => entry.insert(issuer),
-        //         btree_map::Entry::Occupied(_) => panic!("same setup packet already issued"),
-        //     };
-        // }
         let dci: DeviceContextIndex = endpoint_id.address();
         log::debug!(
             "control_in: setup_data: {:?}, ep addr: {:?}",
@@ -228,7 +206,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
         let setup_data = SetupPacketRaw::from(setup_data.0);
         let mut status_trb = transfer::StatusStage::new();
-        if let Some(buf) = unsafe { buf.as_ref() } {
+        if let Some(buf) = buf {
+            let buf = unsafe { buf.as_ref() };
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
                 .set_request_type(setup_data.bm_request_type)
@@ -295,6 +274,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
     pub fn on_transfer_event_received(&mut self, event: event::TransferEvent) {
         let trb_pointer = event.trb_pointer();
+        log::debug!("trb_pointer: {}", trb_pointer);
         if trb_pointer == 0 {
             log::debug!("Invalid trb_pointer: null");
             return;
@@ -327,9 +307,109 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                 };
 
                 log::debug!("setup_stage: {:?}", setup_stage);
+                let mut device_descriptor: MaybeUninit<DeviceDescriptor> = MaybeUninit::uninit();
+                let device_descriptor = unsafe {
+                    device_descriptor
+                        .as_mut_ptr()
+                        .copy_from_nonoverlapping(self.buf.as_ptr().cast(), 1);
+                    device_descriptor.assume_init()
+                };
+                log::debug!("device_descriptor: {:?}", device_descriptor);
             }
         }
         todo!()
+    }
+
+    pub async fn async_control_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
+        bm_request_type: usb_host::RequestType,
+        b_request: usb_host::RequestCode,
+        w_value: usb_host::WValue,
+        w_index: u16,
+        buf: Option<&mut [u8]>,
+    ) -> Result<usize, usb_host::TransferError> {
+        let w_length = buf.as_ref().map_or(0, |buf| buf.len() as u16);
+        log::debug!("w_length: {}", w_length);
+        let setup_packet = SetupPacket {
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            w_length,
+        }
+        .into();
+        let endpoint_id = EndpointId::from_endpoint(ep);
+        self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
+        let event_ring = Arc::clone(&self.event_ring);
+        let trb = {
+            let mut registers = self.registers.lock();
+            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            EventRing::get_received_transfer_trb(event_ring, &mut interrupter).await
+        };
+        match trb.completion_code() {
+            Ok(event::CompletionCode::ShortPacket) => {}
+            Ok(event::CompletionCode::Success) => {
+                return Ok(w_length as usize);
+            }
+            Ok(err) => {
+                log::error!("err: {:?}", err);
+                return Err(usb_host::TransferError::Permanent("CompletionCode error"));
+            }
+            Err(err) => {
+                log::debug!("err: {:?}", err);
+                return Err(usb_host::TransferError::Permanent(
+                    "Unknown completion code",
+                ));
+            }
+        }
+        return Ok(trb.trb_transfer_length() as usize);
+    }
+}
+
+impl<M: Mapper + Clone> DeviceContextInfo<M> {
+    // request descriptor impls
+
+    pub async fn request_device_descriptor(&mut self) -> DeviceDescriptor {
+        let mut device_descriptor: MaybeUninit<DeviceDescriptor> = MaybeUninit::uninit();
+        self.request_descriptor(
+            EndpointId::default_control_pipe(),
+            DescriptorType::Device,
+            0,
+            &mut device_descriptor,
+        )
+        .await;
+        unsafe { device_descriptor.assume_init() }
+    }
+
+    pub async fn request_descriptor<T>(
+        &mut self,
+        mut endpoint_id: EndpointId,
+        descriptor_type: DescriptorType,
+        descriptor_index: u8,
+        buf: &mut MaybeUninit<T>,
+    ) {
+        let bm_request_type = (
+            usb_host::RequestDirection::DeviceToHost,
+            usb_host::RequestKind::Standard,
+            usb_host::RequestRecipient::Device,
+        )
+            .into();
+        let b_request = usb_host::RequestCode::GetDescriptor;
+        let w_value = (descriptor_index, descriptor_type as u8).into();
+        let w_index = 0;
+        let length = self
+            .async_control_transfer(
+                &mut endpoint_id,
+                bm_request_type,
+                b_request,
+                w_value,
+                w_index,
+                Some(unsafe { core::mem::transmute(buf.as_bytes_mut()) }),
+            )
+            .await
+            .unwrap();
+        log::debug!("Transferred {} bytes", length);
     }
 }
 
@@ -380,6 +460,10 @@ impl EndpointId {
         }
     }
 
+    pub fn from_endpoint(endpoint: &dyn usb_host::Endpoint) -> Self {
+        Self::new(endpoint.endpoint_num(), endpoint.direction())
+    }
+
     pub fn address(&self) -> DeviceContextIndex {
         DeviceContextIndex(calc_dci(self.endpoint_number, self.direct))
     }
@@ -389,6 +473,44 @@ impl EndpointId {
             endpoint_number: 0,
             direct: usb_host::Direction::Out, // actually default control pipe is IN/OUT
         }
+    }
+}
+
+impl usb_host::Endpoint for EndpointId {
+    fn endpoint_num(&self) -> u8 {
+        self.endpoint_number
+    }
+
+    fn direction(&self) -> usb_host::Direction {
+        self.direct
+    }
+
+    fn address(&self) -> u8 {
+        EndpointId::address(self).address()
+    }
+
+    fn transfer_type(&self) -> usb_host::TransferType {
+        todo!()
+    }
+
+    fn max_packet_size(&self) -> u16 {
+        todo!()
+    }
+
+    fn in_toggle(&self) -> bool {
+        todo!()
+    }
+
+    fn set_in_toggle(&mut self, toggle: bool) {
+        todo!()
+    }
+
+    fn out_toggle(&self) -> bool {
+        todo!()
+    }
+
+    fn set_out_toggle(&mut self, toggle: bool) {
+        todo!()
     }
 }
 

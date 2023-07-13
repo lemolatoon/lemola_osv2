@@ -5,6 +5,7 @@ pub fn dummy_waker() -> core::task::Waker {
 #[macro_export]
 macro_rules! await_sync {
     ($e:expr) => {{
+        use core::future::Future;
         let mut pinned_future = ::core::pin::pin!($e);
         let waker = $crate::futures::dummy_waker();
         let context = &mut ::core::task::Context::from_waker(&waker);
