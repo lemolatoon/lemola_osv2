@@ -2,6 +2,7 @@ use core::cmp;
 
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
+use kernel_lib::await_sync;
 use usb_host::{SetupPacket, USBHost};
 use xhci::{
     accessor::Mapper,
@@ -379,7 +380,7 @@ where
         };
         self.port_configure_state
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
-        device.start_initialization();
+        await_sync!(device.start_initialization());
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {

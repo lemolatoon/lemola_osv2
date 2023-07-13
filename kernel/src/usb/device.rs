@@ -1,10 +1,10 @@
 extern crate alloc;
 use core::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
 
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use kernel_lib::await_sync;
 use spin::Mutex;
-use usb_host::{DescriptorType, DeviceDescriptor, SetupPacket};
+use usb_host::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor, SetupPacket};
 use xhci::{
     accessor::Mapper,
     context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler},
@@ -16,6 +16,7 @@ use xhci::{
 
 use crate::{
     usb::{
+        descriptor::DescriptorIter,
         device,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },
@@ -26,7 +27,7 @@ use crate::{
     },
 };
 
-use super::class_driver::ClassDriver;
+use super::{class_driver::ClassDriver, descriptor::Descriptor};
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
@@ -170,14 +171,17 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         endpoint0_context.set_error_count(3);
     }
 
-    pub fn start_initialization(&mut self) {
+    pub async fn start_initialization(&mut self) {
         debug_assert_eq!(
             self.initialization_state,
             DeviceInitializationState::NotInitialized
         );
         self.initialization_state = DeviceInitializationState::Initialize1;
-        let device_descriptor = await_sync!(self.request_device_descriptor());
+        let device_descriptor = self.request_device_descriptor().await;
         log::debug!("device_descriptor: {:?}", device_descriptor);
+        let descriptors = self.request_config_descriptor_and_rest().await;
+        log::debug!("descriptors requested with config: {:?}", descriptors);
+        todo!()
     }
 
     pub fn buf_len(&self) -> usize {
@@ -363,7 +367,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                 ));
             }
         }
-        return Ok(trb.trb_transfer_length() as usize);
+        return Ok(w_length as usize - trb.trb_transfer_length() as usize);
     }
 }
 
@@ -372,23 +376,56 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
     pub async fn request_device_descriptor(&mut self) -> DeviceDescriptor {
         let mut device_descriptor: MaybeUninit<DeviceDescriptor> = MaybeUninit::uninit();
-        self.request_descriptor(
-            EndpointId::default_control_pipe(),
-            DescriptorType::Device,
-            0,
-            &mut device_descriptor,
-        )
-        .await;
+        let length = self
+            .request_descriptor(
+                EndpointId::default_control_pipe(),
+                DescriptorType::Device,
+                0,
+                as_byte_slice_mut(&mut device_descriptor),
+            )
+            .await;
+        assert_eq!(length, core::mem::size_of::<DeviceDescriptor>());
         unsafe { device_descriptor.assume_init() }
     }
 
-    pub async fn request_descriptor<T>(
+    pub async fn request_config_descriptor_and_rest(&mut self) -> Vec<Descriptor> {
+        let mut config_descriptor_buf: MaybeUninit<ConfigurationDescriptor> = MaybeUninit::uninit();
+        let length = self
+            .request_descriptor(
+                EndpointId::default_control_pipe(),
+                DescriptorType::Configuration,
+                0,
+                as_byte_slice_mut(&mut config_descriptor_buf),
+            )
+            .await;
+        assert_eq!(length, core::mem::size_of::<ConfigurationDescriptor>());
+        let config_descriptor = unsafe { config_descriptor_buf.assume_init() };
+        let mut buf: Vec<u8> = Vec::with_capacity(config_descriptor.w_total_length as usize);
+        let length = {
+            let buf: &mut [u8] = unsafe {
+                buf.set_len(buf.capacity());
+                &mut buf[..]
+            };
+            self.request_descriptor(
+                EndpointId::default_control_pipe(),
+                DescriptorType::Configuration,
+                0,
+                buf,
+            )
+            .await
+        };
+        assert_eq!(length, buf.len());
+        DescriptorIter::new(&buf).collect()
+    }
+
+    /// return actual length transferred
+    pub async fn request_descriptor(
         &mut self,
         mut endpoint_id: EndpointId,
         descriptor_type: DescriptorType,
         descriptor_index: u8,
-        buf: &mut MaybeUninit<T>,
-    ) {
+        buf: &mut [u8],
+    ) -> usize {
         let bm_request_type = (
             usb_host::RequestDirection::DeviceToHost,
             usb_host::RequestKind::Standard,
@@ -405,12 +442,20 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                 b_request,
                 w_value,
                 w_index,
-                Some(unsafe { core::mem::transmute(buf.as_bytes_mut()) }),
+                Some(buf),
             )
             .await
             .unwrap();
         log::debug!("Transferred {} bytes", length);
+        return length;
     }
+}
+
+fn as_byte_slice_mut<T>(buf: &mut T) -> &mut [u8] {
+    let buf: &mut [u8] = unsafe {
+        core::slice::from_raw_parts_mut(buf as *mut T as *mut u8, core::mem::size_of::<T>())
+    };
+    buf
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
