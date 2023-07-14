@@ -1,8 +1,7 @@
 extern crate alloc;
-use core::{mem::MaybeUninit, pin::Pin, ptr::NonNull};
+use core::{mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
-use kernel_lib::await_sync;
 use spin::Mutex;
 use usb_host::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor, SetupPacket};
 use xhci::{
@@ -17,17 +16,12 @@ use xhci::{
 use crate::{
     usb::{
         descriptor::DescriptorIter,
-        device,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },
-    xhci::{
-        event_ring::EventRing,
-        transfer_ring::TransferRing,
-        trb::{self, TrbRaw},
-    },
+    xhci::{event_ring::EventRing, transfer_ring::TransferRing, trb::TrbRaw},
 };
 
-use super::{class_driver::ClassDriver, descriptor::Descriptor};
+use super::descriptor::Descriptor;
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
@@ -449,7 +443,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             .await
         };
         assert_eq!(length, buf.len());
-        DescriptorIter::new(&buf).collect()
+        DescriptorIter::new(&buf).map(Into::into).collect()
     }
 
     /// return actual length transferred
