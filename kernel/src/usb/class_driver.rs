@@ -276,6 +276,10 @@ impl<
                 // sized slice into it for the transfer.
                 let mut config =
                     unsafe { MaybeUninit::<[u8; CONFIG_BUFFER_LEN]>::uninit().assume_init() };
+                if CONFIG_BUFFER_LEN < conf_desc.w_total_length as usize {
+                    log::trace!("config descriptor: {:?}", conf_desc);
+                    return Err(TransferError::Permanent("config descriptor too large"));
+                }
                 let config_buf = &mut config[..conf_desc.w_total_length as usize];
                 let len = host.control_transfer(
                     &mut self.ep0,
@@ -289,6 +293,7 @@ impl<
                     0,
                     Some(config_buf),
                 )?;
+                panic!();
                 assert!(len == conf_desc.w_total_length as usize);
                 let EndpointInfo {
                     interface_num,

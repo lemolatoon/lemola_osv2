@@ -302,7 +302,7 @@ where
             slot_id
         );
         let ep0_dci = DeviceContextIndex::ep0();
-        let device = self.device_manager.allocate_device(slot_id);
+        let device = self.device_manager.allocate_device(port_index, slot_id);
         device.enable_slot_context();
         device.enable_endpoint(ep0_dci);
 

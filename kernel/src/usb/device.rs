@@ -2,19 +2,24 @@ extern crate alloc;
 use core::{mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use kernel_lib::await_sync;
 use spin::Mutex;
-use usb_host::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor, SetupPacket};
+use usb_host::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Driver, SetupPacket};
 use xhci::{
     accessor::Mapper,
-    context::{Device32Byte, EndpointHandler, Input32Byte, SlotHandler},
+    context::{
+        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte,
+        InputControlHandler, SlotHandler,
+    },
     ring::trb::{
-        event,
+        command, event,
         transfer::{self, TransferType},
     },
 };
 
 use crate::{
     usb::{
+        class_driver::{keyboard, mouse},
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },
@@ -25,7 +30,13 @@ use super::descriptor::Descriptor;
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
-pub struct InputContextWrapper(Input32Byte);
+pub struct InputContextWrapper(pub Input32Byte);
+
+impl InputContextWrapper {
+    pub fn new_zeroed() -> Self {
+        Self(Input32Byte::new_32byte())
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
@@ -36,7 +47,9 @@ pub struct DeviceContextInfo<M: Mapper + Clone> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing>>,
     slot_id: usize,
+    port_index: usize,
     state: DeviceContextState,
+    descriptors: Option<Vec<Descriptor>>,
     pub initialization_state: DeviceInitializationState,
     pub input_context: InputContextWrapper,
     pub device_context: DeviceContextWrapper,
@@ -49,6 +62,7 @@ pub struct DeviceContextInfo<M: Mapper + Clone> {
 
 impl<M: Mapper + Clone> DeviceContextInfo<M> {
     pub fn blank(
+        port_index: usize,
         slot_id: usize,
         registers: Arc<Mutex<xhci::Registers<M>>>,
         event_ring: Arc<Mutex<EventRing>>,
@@ -70,7 +84,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             registers,
             event_ring,
             slot_id,
+            port_index,
             state: DeviceContextState::Blank,
+            descriptors: None,
             initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper(Input32Byte::new_32byte()), // 0 filled
             device_context: DeviceContextWrapper(Device32Byte::new_32byte()), // 0 filled
@@ -173,11 +189,19 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         self.initialization_state = DeviceInitializationState::Initialize1;
         let device_descriptor = self.request_device_descriptor().await;
         log::debug!("device_descriptor: {:?}", device_descriptor);
+        log::info!("1");
         let descriptors = self.request_config_descriptor_and_rest().await;
+        // log::info!("2");
+        // let descriptors = self.request_config_descriptor_and_rest().await;
+        // log::info!("3");
+        // let descriptors = self.request_config_descriptor_and_rest().await;
+        // log::info!("4");
+        // let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
         if device_descriptor.b_device_class == 0 {
-            let mut book_keyboard_interface = None;
+            let mut boot_keyboard_interface = None;
             let mut mouse_interface = None;
+            let mut endpoint_descriptor = None;
             for desc in descriptors {
                 if let Descriptor::Interface(interface) = desc {
                     match (
@@ -187,7 +211,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                     ) {
                         (3, 1, 1) => {
                             log::debug!("HID boot keyboard interface found");
-                            book_keyboard_interface = Some(interface);
+                            boot_keyboard_interface = Some(interface);
                         }
                         (3, 1, 2) => {
                             log::debug!("HID mouse interface found");
@@ -197,19 +221,41 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                             log::debug!("unknown interface found: {:?}", unknown);
                         }
                     };
+                } else if let Descriptor::Endpoint(endpoint) = desc {
+                    log::debug!("endpoint: {:?}", endpoint);
+                    if (boot_keyboard_interface.is_some() || mouse_interface.is_some())
+                        && endpoint_descriptor.is_none()
+                    {
+                        endpoint_descriptor = Some(endpoint);
+                    }
                 }
             }
-            if book_keyboard_interface.is_none() {
+            if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
+                fn callback(address: u8, buf: &[u8]) {
+                    log::info!("keyboard input: {:?}, {:?}", address, buf);
+                }
+                let mut keyboard_driver = keyboard::BootKeyboardDriver::new_boot_keyboard(callback);
+                let mut count = 1;
+                let address = endpoint_descriptor.unwrap().b_endpoint_address;
+                keyboard_driver
+                    .add_device(device_descriptor, address)
+                    .unwrap();
+                loop {
+                    log::debug!("tick: {}", count);
+                    keyboard_driver.tick(count, self).unwrap();
+                    count += 10;
+                }
+            } else {
                 log::warn!("no book keyboard interface found");
             }
 
-            if mouse_interface.is_none() {
+            if let Some(_mouse_interface) = mouse_interface {
+            } else {
                 log::warn!("no mouse interface found");
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
         }
-        todo!()
     }
 
     pub fn buf_len(&self) -> usize {
@@ -222,7 +268,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         endpoint_id: EndpointId,
         setup_data: SetupPacketWrapper,
         buf: Option<NonNull<[u8]>>,
-    ) {
+    ) -> u64 {
         let dci: DeviceContextIndex = endpoint_id.address();
         log::debug!(
             "control_in: setup_data: {:?}, ep addr: {:?}",
@@ -238,7 +284,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
         let setup_data = SetupPacketRaw::from(setup_data.0);
         let mut status_trb = transfer::StatusStage::new();
-        if let Some(buf) = buf {
+        let wait_on = if let Some(buf) = buf {
             let buf = unsafe { buf.as_ref() };
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
@@ -264,12 +310,13 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
             transfer_ring.push(transfer::Allowed::StatusStage(status_trb));
             log::debug!(
-                "control_in: setup_trb_ref_in_ring: {:?}, data_trb_ref_in_ring: {:?}",
+                "control_transfer: setup_trb_ref_in_ring: 0x{:x}, data_trb_ref_in_ring: 0x{:x}",
                 setup_trb_ref_in_ring,
                 data_trb_ref_in_ring
             );
             self.setup_stage_map
                 .insert(data_trb_ref_in_ring, setup_trb_ref_in_ring);
+            data_trb_ref_in_ring
         } else {
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
@@ -288,7 +335,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
 
             self.setup_stage_map
                 .insert(status_trb_ref_in_ring, setup_trb_ref_in_ring);
-        }
+            status_trb_ref_in_ring
+        };
 
         let mut registers = self.registers.lock();
         log::debug!(
@@ -301,7 +349,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             .update_volatile_at(self.slot_id(), |ring| {
                 ring.set_doorbell_target(dci.address());
                 ring.set_doorbell_stream_id(0);
-            })
+            });
+        return wait_on;
     }
 
     pub fn on_transfer_event_received(&mut self, event: event::TransferEvent) {
@@ -372,12 +421,14 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         }
         .into();
         let endpoint_id = EndpointId::from_endpoint(ep);
-        self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
+        let trb_wait_on =
+            self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
             let mut registers = self.registers.lock();
             let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-            EventRing::get_received_transfer_trb(event_ring, &mut interrupter).await
+            EventRing::get_received_transfer_trb_on_trb(event_ring, &mut interrupter, trb_wait_on)
+                .await
         };
         match trb.completion_code() {
             Ok(event::CompletionCode::ShortPacket) => {}
@@ -396,6 +447,135 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             }
         }
         return Ok(w_length as usize - trb.trb_transfer_length() as usize);
+    }
+
+    async fn async_in_transfer(
+        &mut self,
+        ep: &mut dyn usb_host::Endpoint,
+        buf: &mut [u8],
+    ) -> Result<usize, usb_host::TransferError> {
+        use xhci::context::InputHandler;
+        let dci = DeviceContextIndex::new(ep.endpoint_num(), ep.direction());
+        if self.descriptors.is_none() {
+            self.request_config_descriptor_and_rest().await;
+        }
+        let endpoint_descriptor = self
+            .descriptors
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|descriptor| {
+                if let Descriptor::Endpoint(endpoint_descriptor) = descriptor {
+                    if endpoint_descriptor.b_endpoint_address == ep.address() {
+                        Some(*endpoint_descriptor)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .next()
+            .ok_or(usb_host::TransferError::Permanent(
+                "Endpoint Descriptor Not Found",
+            ))?;
+        let portsc = {
+            let registers = self.registers.lock();
+            registers
+                .port_register_set
+                .read_volatile_at(self.port_index)
+                .portsc
+        };
+        if self.transfer_ring_at(dci).is_none() {
+            // Configure endpoint
+            let input_control_context = self.input_context.0.control_mut();
+            input_control_context.set_add_context_flag(0);
+            match ep.transfer_type() {
+                usb_host::TransferType::Interrupt => {
+                    let mut transfer_ring = TransferRing::alloc_new(32);
+                    transfer_ring.fill_with_normal();
+                    input_control_context.set_add_context_flag(dci.address() as usize);
+                    let device_context = self.input_context.0.device_mut();
+                    // Setup endpoint context
+                    let endpoint_context = device_context.endpoint_mut(dci.address() as usize);
+                    endpoint_context.set_endpoint_type(EndpointType::InterruptIn);
+                    if !transfer_ring.cycle_bit() {
+                        endpoint_context.set_dequeue_cycle_state();
+                    } else {
+                        endpoint_context.clear_dequeue_cycle_state();
+                    }
+                    endpoint_context.set_error_count(3);
+                    endpoint_context.set_max_packet_size(ep.max_packet_size());
+                    endpoint_context
+                        .set_tr_dequeue_pointer(transfer_ring.buffer_ptr() as *const TrbRaw as u64);
+                    endpoint_context.set_average_trb_length(8); // TODO: set this correctly
+                    endpoint_context.set_max_burst_size(0);
+                    endpoint_context.set_max_primary_streams(0);
+                    endpoint_context.set_mult(0);
+                    let interval = match portsc.port_speed() {
+                        1 /* FullSpeed */ | 2 /* LowSpeed */ => endpoint_descriptor.b_interval.ilog2() as u8 + 3,
+                        3 /* HighSpeed */ | 4 /* SuperSpeed */ => endpoint_descriptor.b_interval - 1,
+                        _ => return Err(usb_host::TransferError::Permanent("Unknown speed")),
+                    };
+                    endpoint_context.set_interval(interval);
+                    // End Setup endpoint context
+                    self.transfer_rings[dci.address() as usize] = Some(transfer_ring);
+                }
+                usb_host::TransferType::Control => todo!(),
+                usb_host::TransferType::Isochronous => todo!(),
+                usb_host::TransferType::Bulk => todo!(),
+            }
+            let device_context = self.input_context.0.device_mut();
+            device_context.slot_mut().set_context_entries(dci.address());
+            let trb = {
+                let mut trb = command::ConfigureEndpoint::new();
+                trb.set_input_context_pointer(&self.input_context.0 as *const Input32Byte as u64);
+                trb.set_slot_id(self.slot_id() as u8);
+                let event_ring = Arc::clone(&self.event_ring);
+                let mut registers = self.registers.lock();
+                let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+                EventRing::get_received_command_trb(event_ring, &mut interrupter).await
+            };
+            match trb.completion_code() {
+                Ok(event::CompletionCode::Success) => {}
+                _ => return Err(usb_host::TransferError::Retry("CompletionCode error")),
+            };
+        }
+
+        let event_ring = Arc::clone(&self.event_ring);
+        let mut registers = self.registers.lock();
+        let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+        let slot_id = self.slot_id();
+        let trb = EventRing::get_received_transfer_trb_on_slot(
+            event_ring,
+            &mut interrupter,
+            slot_id as u8,
+        )
+        .await;
+        let transferred_length = trb.trb_transfer_length();
+        let transfer_trb = transfer::Allowed::try_from(unsafe {
+            (trb.trb_pointer() as *const TrbRaw).read_volatile()
+        })
+        .unwrap();
+        match transfer_trb {
+            transfer::Allowed::SetupStage(_) => todo!(),
+            transfer::Allowed::DataStage(_) => todo!(),
+            transfer::Allowed::StatusStage(_) => todo!(),
+            transfer::Allowed::Isoch(_) => todo!(),
+            transfer::Allowed::Link(_) => todo!(),
+            transfer::Allowed::EventData(_) => todo!(),
+            transfer::Allowed::Noop(_) => todo!(),
+            transfer::Allowed::Normal(normal) => {
+                let buffer = unsafe {
+                    core::slice::from_raw_parts(
+                        normal.data_buffer_pointer() as *const u8,
+                        transferred_length as usize,
+                    )
+                };
+                buf.copy_from_slice(buffer);
+            }
+        };
+        Ok(transferred_length as usize)
     }
 }
 
@@ -443,7 +623,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             .await
         };
         assert_eq!(length, buf.len());
-        DescriptorIter::new(&buf).map(Into::into).collect()
+        let descriptors: Vec<Descriptor> = DescriptorIter::new(&buf).map(Into::into).collect();
+        self.descriptors = Some(descriptors.clone());
+        descriptors
     }
 
     /// return actual length transferred
@@ -502,6 +684,11 @@ impl DeviceContextIndex {
 
     pub fn new(endpoint_number: u8, direct: usb_host::Direction) -> Self {
         let dci = calc_dci(endpoint_number, direct);
+        Self::checked_new(dci)
+    }
+
+    pub fn from_endpoint_address(endpoint_address: u8) -> Self {
+        let dci = (endpoint_address & 0xf) * 2 + (endpoint_address >> 7);
         Self::checked_new(dci)
     }
 
@@ -597,7 +784,14 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M> {
         w_index: u16,
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
-        todo!()
+        await_sync!(self.async_control_transfer(
+            ep,
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            buf
+        ))
     }
 
     fn in_transfer(
@@ -605,7 +799,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M> {
         ep: &mut dyn usb_host::Endpoint,
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
-        todo!()
+        await_sync!(self.async_in_transfer(ep, buf))
     }
 
     fn out_transfer(

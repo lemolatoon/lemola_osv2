@@ -26,11 +26,20 @@ impl TransferRing {
                 .expect("Command Ring buffer allocation failed.");
         let cycle_bit = true;
         let write_index = 0;
-        Self {
+        let mut ring = Self {
             trb_buffer,
             write_index,
             cycle_bit,
-        }
+        };
+
+        // for _ in 0..ring.trb_buffer.len() {
+        //     let noop = transfer::Noop::new();
+        //     ring.push(transfer::Allowed::Noop(noop));
+        // }
+        let noop = transfer::Noop::new();
+        ring.push(transfer::Allowed::Noop(noop));
+
+        ring
     }
 
     pub fn alloc_new(buf_size: usize) -> Box<Self> {
@@ -39,6 +48,27 @@ impl TransferRing {
 
         alloc_with_boundary_with_default_else(RING_ALIGNMENT, RING_BOUNDARY, || Self::new(buf_size))
             .unwrap()
+    }
+
+    pub fn fill_with_normal(&mut self) {
+        for _ in 0..self.trb_buffer.len() - 1 {
+            let mut normal = transfer::Normal::new();
+            const BUF_LENGTH: usize = 4096;
+            let buffer =
+                alloc_array_with_boundary_with_default_else(BUF_LENGTH, 4096, 4096, || 0u8)
+                    .unwrap();
+            normal
+                .set_data_buffer_pointer(buffer.as_ptr() as u64)
+                .set_trb_transfer_length(BUF_LENGTH as u32)
+                .set_td_size(0)
+                .set_interrupt_on_completion()
+                .set_interrupter_target(0);
+            self.push(transfer::Allowed::Normal(normal));
+        }
+    }
+
+    pub fn cycle_bit(&self) -> bool {
+        self.cycle_bit
     }
 
     pub fn buffer_ptr(&self) -> *const [TrbRaw] {
@@ -62,6 +92,11 @@ impl TransferRing {
         );
 
         let trb_ptr = &mut self.trb_buffer[self.write_index] as *mut TrbRaw;
+        log::debug!(
+            "write_index: {} / {}",
+            self.write_index,
+            self.trb_buffer.len() - 1
+        );
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
             log::debug!("end of the ring");

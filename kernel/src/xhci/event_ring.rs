@@ -169,11 +169,38 @@ impl EventRing {
         event::Allowed::try_from(popped.into_raw()).map_err(TrbRaw::new_unchecked)
     }
 
-    pub async fn get_received_transfer_trb<M: Mapper + Clone>(
+    pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone>(
         event_ring: Arc<Mutex<EventRing>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        slot_id: u8,
     ) -> trb::event::TransferEvent {
         TransferEventFuture {
+            event_ring,
+            interrupter,
+            wait_on: TransferEventWaitKind::SlotId(slot_id),
+        }
+        .await
+    }
+
+    pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone>(
+        event_ring: Arc<Mutex<EventRing>>,
+        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        trb_pointer: u64,
+    ) -> trb::event::TransferEvent {
+        log::debug!("wait on trb: 0x{:x}", trb_pointer);
+        TransferEventFuture {
+            event_ring,
+            interrupter,
+            wait_on: TransferEventWaitKind::TrbPtr(trb_pointer),
+        }
+        .await
+    }
+
+    pub async fn get_received_command_trb<M: Mapper + Clone>(
+        event_ring: Arc<Mutex<EventRing>>,
+        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+    ) -> trb::event::CommandCompletion {
+        CommandCompletionFuture {
             event_ring,
             interrupter,
         }
@@ -181,13 +208,89 @@ impl EventRing {
     }
 }
 
+enum TransferEventWaitKind {
+    SlotId(u8),
+    TrbPtr(u64),
+}
+
 struct TransferEventFuture<'a, 'b, M: Mapper + Clone> {
     pub event_ring: Arc<Mutex<EventRing>>,
     pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+    pub wait_on: TransferEventWaitKind,
 }
 
 impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
     type Output = trb::event::TransferEvent;
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        // FIXME: this is safe because called member methods does not move them, but their must be a better way
+        let Self {
+            interrupter,
+            event_ring,
+            wait_on,
+        } = unsafe { self.get_unchecked_mut() };
+        let event_ring_trb = unsafe {
+            (interrupter
+                .erdp
+                .read_volatile()
+                .event_ring_dequeue_pointer() as *const trb::Link)
+                .read_volatile()
+        };
+        let mut event_ring = event_ring.lock();
+        if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
+            // EventRing does not have front
+            return Poll::Pending;
+        }
+        match wait_on {
+            TransferEventWaitKind::SlotId(slot_id) => match event_ring.pop(interrupter) {
+                Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == *slot_id => {
+                    log::debug!("got event: {:?}", event);
+                    Poll::Ready(event)
+                }
+                Ok(trb) => {
+                    // EventRing does not have front
+                    log::info!("ignoring...: {:?}", trb);
+                    Poll::Pending
+                }
+                Err(trb) => {
+                    log::info!("ignoring err...: {:?}", trb);
+                    Poll::Pending
+                }
+            },
+            TransferEventWaitKind::TrbPtr(ptr) => {
+                match event_ring.pop(interrupter) {
+                    Ok(event::Allowed::TransferEvent(event)) /* if event.trb_pointer() == *ptr */ => {
+                        log::debug!("got event: {:?}", event);
+                        Poll::Ready(event)
+                    }
+                    Ok(trb) => {
+                        // EventRing does not have front
+                        log::info!("ignoring...: {:?}", trb);
+                        if !matches!(trb, event::Allowed::PortStatusChange(_)) {
+                            panic!("ignoring...: {:?}", trb);
+                        }
+                        Poll::Pending
+                    }
+                    Err(trb) => {
+                        log::info!("ignoring err...: {:?}", trb);
+                        Poll::Pending
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone> {
+    pub event_ring: Arc<Mutex<EventRing>>,
+    pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+}
+
+impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
+    type Output = trb::event::CommandCompletion;
 
     fn poll(
         self: core::pin::Pin<&mut Self>,
@@ -211,7 +314,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
             return Poll::Pending;
         }
         match event_ring.pop(interrupter) {
-            Ok(event::Allowed::TransferEvent(event)) => Poll::Ready(event),
+            Ok(event::Allowed::CommandCompletion(event)) => Poll::Ready(event),
             Ok(trb) => {
                 // EventRing does not have front
                 log::info!("ignoring...: {:?}", trb);

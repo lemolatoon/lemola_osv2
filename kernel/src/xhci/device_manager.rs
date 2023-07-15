@@ -44,7 +44,11 @@ impl<M: Mapper + Clone> DeviceManager<M> {
         self.device_context_array.device_contexts.as_mut_ptr()
     }
 
-    pub fn allocate_device(&mut self, slot_id: usize) -> &mut DeviceContextInfo<M> {
+    pub fn allocate_device(
+        &mut self,
+        port_index: usize,
+        slot_id: usize,
+    ) -> &mut DeviceContextInfo<M> {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
                 "slot_id is out of range: {} / {}",
@@ -61,8 +65,9 @@ impl<M: Mapper + Clone> DeviceManager<M> {
 
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
-        self.device_context_array.device_context_infos[slot_id] =
-            Some(DeviceContextInfo::blank(slot_id, registers, event_ring));
+        self.device_context_array.device_context_infos[slot_id] = Some(DeviceContextInfo::blank(
+            port_index, slot_id, registers, event_ring,
+        ));
         self.device_context_array.device_context_infos[slot_id]
             .as_mut()
             .unwrap()
