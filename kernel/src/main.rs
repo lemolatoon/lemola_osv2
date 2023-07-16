@@ -7,8 +7,11 @@ pub extern crate alloc;
 use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
+    alloc::alloc::GlobalAllocator,
     graphics::{init_graphics, init_logger},
-    println, serial_println,
+    memory::MemoryMapper,
+    println, serial_println, tick,
+    usb::{class_driver::callbacks, device::DeviceContextInfo},
     xhci::controller::XhciController,
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
@@ -93,8 +96,15 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     }
     log::debug!("Configured ports");
 
+    let mut class_drivers =
+        kernel::usb::class_driver::ClassDriverManager::new(callbacks::mouse, callbacks::keyboard);
+
+    let mut count = 1;
+    static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: usb_host::USBHost);
     loop {
-        controller.process_event();
+        count += 1;
+        controller.process_event(&mut class_drivers);
+        tick!(class_drivers, controller, count);
     }
 }
 

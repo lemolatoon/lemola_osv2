@@ -100,6 +100,17 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         self.device_context_array.device_context_infos[slot_id].as_mut()
     }
 
+    pub fn device_host_by_slot_id_mut(
+        &mut self,
+        slot_id: usize,
+    ) -> Option<&mut dyn usb_host::USBHost> {
+        if let Some(host) = self.device_context_array.device_context_infos[slot_id].as_mut() {
+            let host: &mut dyn usb_host::USBHost = host;
+            return Some(host);
+        }
+        None
+    }
+
     pub fn load_device_context(&mut self, slot_id: usize) {
         if slot_id > self.device_context_array.max_slots() {
             log::error!("Invalid slot_id: {}", slot_id);

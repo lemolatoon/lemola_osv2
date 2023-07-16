@@ -14,7 +14,10 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
-    usb::device::{DeviceContextIndex, InputContextWrapper},
+    usb::{
+        class_driver::ClassDriverManager,
+        device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
+    },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
 use spin::{Mutex, MutexGuard};
@@ -158,7 +161,11 @@ where
         log::debug!("[XHCI] xhc controller starts running!!");
     }
 
-    pub fn process_event(&mut self) {
+    pub fn process_event<MF, KF>(&mut self, class_drivers: &mut ClassDriverManager<MF, KF>)
+    where
+        MF: Fn(u8, &[u8]),
+        KF: Fn(u8, &[u8]),
+    {
         let mut registers = self.registers.lock();
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
@@ -171,6 +178,12 @@ where
         let mut event_ring = self.event_ring.lock();
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
+            while let Some(trb) = event_ring.pop_already_popped() {
+                drop(event_ring);
+                drop(registers);
+                self.process_event_ring_event(trb, class_drivers);
+                return;
+            }
             return;
         }
         log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
@@ -180,7 +193,7 @@ where
         drop(event_ring);
         let _trb = match popped {
             Ok(event_trb) => {
-                self.process_event_ring_event(event_trb);
+                self.process_event_ring_event(event_trb, class_drivers);
                 return;
             }
             Err(raw) => raw,
@@ -189,13 +202,20 @@ where
         todo!()
     }
 
-    pub fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
+    pub fn process_event_ring_event<MF, KF>(
+        &mut self,
+        event_trb: event::Allowed,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
+    ) where
+        MF: Fn(u8, &[u8]),
+        KF: Fn(u8, &[u8]),
+    {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
                 self.process_transfer_event(transfer_event);
             }
             event::Allowed::CommandCompletion(command_completion) => {
-                self.process_command_completion_event(command_completion)
+                self.process_command_completion_event(command_completion, class_drivers)
             }
             event::Allowed::PortStatusChange(port_status_change) => {
                 self.process_port_status_change_event(port_status_change)
@@ -371,7 +391,15 @@ where
         })
     }
 
-    pub fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
+    pub fn initialize_device_at<MF, KF>(
+        &mut self,
+        port_idx: u8,
+        slot_id: u8,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
+    ) where
+        MF: Fn(u8, &[u8]),
+        KF: Fn(u8, &[u8]),
+    {
         log::debug!(
             "initialize device at: port_id: {}, slot_id: {}",
             port_idx + 1,
@@ -384,7 +412,7 @@ where
         };
         self.port_configure_state
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
-        await_sync!(device.start_initialization());
+        await_sync!(device.start_initialization(class_drivers));
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
@@ -528,6 +556,10 @@ where
         }
         log::debug!("OS has owned xHC!!");
     }
+
+    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Option<&mut dyn usb_host::USBHost> {
+        self.device_manager.device_host_by_slot_id_mut(slot_id)
+    }
 }
 
 impl<M> XhciController<M, &'static GlobalAllocator>
@@ -554,7 +586,14 @@ where
         }
     }
 
-    fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
+    fn process_command_completion_event<MF, KF>(
+        &mut self,
+        event: trb::event::CommandCompletion,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
+    ) where
+        MF: Fn(u8, &[u8]),
+        KF: Fn(u8, &[u8]),
+    {
         let slot_id = event.slot_id();
         let Ok(completion_code) = event.completion_code() else {
             log::error!(
@@ -649,7 +688,7 @@ where
                     }
                 }
 
-                self.initialize_device_at(port_index, slot_id);
+                self.initialize_device_at(port_index, slot_id, class_drivers);
             }
             trb::command::Allowed::ConfigureEndpoint(_) => todo!(),
             trb::command::Allowed::EvaluateContext(_) => todo!(),

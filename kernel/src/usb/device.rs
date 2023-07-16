@@ -22,7 +22,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
-        class_driver::{keyboard, mouse},
+        class_driver::{callbacks, keyboard, mouse},
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },
@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-use super::descriptor::Descriptor;
+use super::{class_driver::ClassDriverManager, descriptor::Descriptor};
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
@@ -211,7 +211,13 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         endpoint0_context.set_error_count(3);
     }
 
-    pub async fn start_initialization(&mut self) {
+    pub async fn start_initialization<MF, KF>(
+        &mut self,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
+    ) where
+        MF: Fn(u8, &[u8]),
+        KF: Fn(u8, &[u8]),
+    {
         let device_descriptor = self.request_device_descriptor().await;
         let buffer_len = self
             .transfer_ring_at(DeviceContextIndex::ep0())
@@ -257,39 +263,19 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                fn callback(address: u8, buf: &[u8]) {
-                    log::info!("keyboard input: {:?}, {:?}", address, buf);
-                }
-                let mut keyboard_driver = keyboard::BootKeyboardDriver::new_boot_keyboard(callback);
-                let mut count = 1;
                 let address = self.device_address();
-                keyboard_driver
-                    .add_device(device_descriptor, address)
+                class_drivers
+                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-                loop {
-                    log::debug!("tick: {}", count);
-                    keyboard_driver.tick(count, self).unwrap();
-                    count += 10;
-                }
             } else {
                 log::warn!("no book keyboard interface found");
             }
 
             if let Some(_mouse_interface) = mouse_interface {
-                fn callback(address: u8, buf: &[u8]) {
-                    log::info!("mouse input: {:?}, {:?}", address, buf);
-                }
-                let mut keyboard_driver = mouse::MouseDriver::new_mouse(callback);
-                let mut count = 1;
                 let address = self.device_address();
-                keyboard_driver
-                    .add_device(device_descriptor, address)
+                class_drivers
+                    .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-                loop {
-                    log::debug!("tick: {}", count);
-                    keyboard_driver.tick(count, self).unwrap();
-                    count += 10;
-                }
             } else {
                 log::warn!("no mouse interface found");
             }

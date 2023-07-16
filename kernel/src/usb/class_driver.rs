@@ -1,3 +1,4 @@
+pub mod callbacks;
 pub mod keyboard;
 pub mod mouse;
 
@@ -9,6 +10,9 @@ use usb_host::{
     TransferError, TransferType, WValue,
 };
 use usb_host::{Endpoint as EndpointTrait, USBHost};
+
+use self::keyboard::BootKeyboardDriver;
+use self::mouse::MouseDriver;
 
 type EndpointSearcher = fn(&[u8]) -> Option<EndpointInfo<'_>>;
 pub struct InputOnlyDriver<
@@ -472,4 +476,96 @@ impl EndpointTrait for Endpoint {
     fn set_out_toggle(&mut self, toggle: bool) {
         self.out_toggle = toggle
     }
+}
+
+macro_rules! add_device {
+    ($func_name:ident, $device:ident, $err:expr) => {
+        pub fn $func_name(
+            &mut self,
+            slot_id: usize,
+            device_descriptor: DeviceDescriptor,
+            addr: u8,
+        ) -> Result<(), DriverError> {
+            if self.$device.1.want_device(&device_descriptor) {
+                self.$device.0 = Some(slot_id);
+                return self.$device.1.add_device(device_descriptor, addr);
+            }
+
+            Err(DriverError::Permanent(addr, $err))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! tick {
+    ($class_drivers:expr, $controller:expr, $millis:expr) => {
+        use usb_host::Driver;
+        macro_rules! tick_device {
+            ($device:ident) => {
+                if let Some(slot_id) = $class_drivers.$device().0 {
+                    if let Some(host) = $controller.usb_device_host_at(slot_id) {
+                        $class_drivers.$device().1.tick($millis, host).unwrap();
+                    }
+                }
+            };
+        }
+        tick_device!(mouse);
+        tick_device!(keyboard);
+    };
+}
+
+pub struct ClassDriverManager<MF, KF>
+where
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+{
+    mouse: (Option<usize>, MouseDriver<MF>),
+    keyboard: (Option<usize>, BootKeyboardDriver<KF>),
+}
+
+impl<MF, KF> ClassDriverManager<MF, KF>
+where
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+{
+    pub fn new(mouse_callback: MF, keyboard_callback: KF) -> Self {
+        Self {
+            mouse: (None, MouseDriver::new_mouse(mouse_callback)),
+            keyboard: (
+                None,
+                BootKeyboardDriver::new_boot_keyboard(keyboard_callback),
+            ),
+        }
+    }
+
+    pub fn tick<'a>(
+        &mut self,
+        millis: usize,
+        mut get_host: impl FnMut(usize) -> Option<&'a mut dyn usb_host::USBHost>, // slot_id to host
+    ) -> Result<(), DriverError> {
+        macro_rules! tick_device {
+            ($device:ident) => {
+                if let Some(slot_id) = self.$device.0 {
+                    if let Some(host) = get_host(slot_id) {
+                        self.$device.1.tick(millis, host)?;
+                    }
+                }
+            };
+        }
+        tick_device!(mouse);
+        tick_device!(keyboard);
+        Ok(())
+    }
+
+    pub fn mouse(&mut self) -> &mut (Option<usize>, MouseDriver<MF>) {
+        &mut self.mouse
+    }
+
+    pub fn keyboard(&mut self) -> &mut (Option<usize>, BootKeyboardDriver<KF>) {
+        &mut self.keyboard
+    }
+
+    add_device!(add_mouse_device, mouse, "Mouse device not wanted");
+
+    add_device!(add_keyboard_device, keyboard, "Keyboard device not wanted");
 }

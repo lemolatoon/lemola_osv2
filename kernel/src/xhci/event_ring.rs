@@ -1,7 +1,7 @@
 extern crate alloc;
 use core::{alloc::Allocator, future::Future, task::Poll};
 
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use spin::Mutex;
 use static_assertions::const_assert_eq;
@@ -68,6 +68,7 @@ impl EventRingSegmentTableEntry {
 #[derive(Debug)]
 pub struct EventRing<A: Allocator> {
     trb_buffer: Box<[trb::Link], A>,
+    popped: Vec<event::Allowed>,
     event_ring_segment_table: Box<EventRingSegmentTableEntry, A>,
     cycle_bit: bool,
     n_pop: usize,
@@ -138,6 +139,7 @@ impl EventRing<&'static GlobalAllocator> {
         Self {
             event_ring_segment_table,
             trb_buffer,
+            popped: Vec::new(),
             cycle_bit,
             n_pop: 0,
         }
@@ -145,6 +147,14 @@ impl EventRing<&'static GlobalAllocator> {
 
     pub fn cycle_bit(&self) -> bool {
         self.cycle_bit
+    }
+
+    pub fn push(&mut self, trb: event::Allowed) {
+        self.popped.push(trb);
+    }
+
+    pub fn pop_already_popped(&mut self) -> Option<event::Allowed> {
+        self.popped.pop()
     }
 
     pub fn pop<M: Mapper + Clone>(
@@ -265,7 +275,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
                 }
                 Ok(trb) => {
                     // EventRing does not have front
-                    log::info!("ignoring...: {:?}", trb);
+                    event_ring.push(trb);
                     Poll::Pending
                 }
                 Err(trb) => {
@@ -281,10 +291,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
                     }
                     Ok(trb) => {
                         // EventRing does not have front
-                        log::info!("ignoring...: {:?}", trb);
-                        if !matches!(trb, event::Allowed::PortStatusChange(_)) {
-                            panic!("ignoring...: {:?}", trb);
-                        }
+                        event_ring.push(trb);
                         Poll::Pending
                     }
                     Err(trb) => {
@@ -336,7 +343,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
             }
             Ok(trb) => {
                 // EventRing does not have front
-                log::info!("ignoring...: {:?}", trb);
+                event_ring.push(trb);
                 Poll::Pending
             }
             Err(trb) => {
