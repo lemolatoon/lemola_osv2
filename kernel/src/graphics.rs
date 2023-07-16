@@ -1,7 +1,4 @@
-use core::{
-    cell::Cell,
-    fmt::{self},
-};
+use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
 use kernel_lib::{
