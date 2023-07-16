@@ -75,6 +75,10 @@ impl TransferRing<&'static GlobalAllocator> {
         &*self.trb_buffer as *const [TrbRaw]
     }
 
+    pub fn buffer_len(&self) -> usize {
+        self.trb_buffer.len()
+    }
+
     pub fn toggle_cycle_bit(&mut self) {
         self.cycle_bit = !self.cycle_bit;
     }

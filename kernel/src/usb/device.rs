@@ -128,6 +128,11 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         }
     }
 
+    pub fn device_address(&self) -> u8 {
+        use xhci::context::DeviceHandler;
+        self.device_context.0.slot().usb_device_address()
+    }
+
     pub fn slot_id(&self) -> usize {
         self.slot_id
     }
@@ -221,18 +226,16 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         );
         self.initialization_state = DeviceInitializationState::Initialize1;
         let device_descriptor = self.request_device_descriptor().await;
-        // for _ in 0..32 {
-        //     let device_descriptor = self.request_device_descriptor().await;
-        // }
-        log::debug!("device_descriptor: {:?}", device_descriptor);
-        log::info!("1");
+        let buffer_len = self
+            .transfer_ring_at(DeviceContextIndex::ep0())
+            .as_ref()
+            .unwrap()
+            .buffer_len();
+        for _ in 0..buffer_len {
+            // ensure transfer ring is correctly working.
+            let _ = self.request_device_descriptor().await;
+        }
         let descriptors = self.request_config_descriptor_and_rest().await;
-        // log::info!("2");
-        // let descriptors = self.request_config_descriptor_and_rest().await;
-        // log::info!("3");
-        // let descriptors = self.request_config_descriptor_and_rest().await;
-        // log::info!("4");
-        // let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
         if device_descriptor.b_device_class == 0 {
             let mut boot_keyboard_interface = None;
@@ -272,7 +275,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
                 let mut keyboard_driver = keyboard::BootKeyboardDriver::new_boot_keyboard(callback);
                 let mut count = 1;
-                let address = endpoint_descriptor.unwrap().b_endpoint_address;
+                let address = self.device_address();
                 keyboard_driver
                     .add_device(device_descriptor, address)
                     .unwrap();
@@ -291,7 +294,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
                 let mut keyboard_driver = mouse::MouseDriver::new_mouse(callback);
                 let mut count = 1;
-                let address = endpoint_descriptor.unwrap().b_endpoint_address;
+                let address = self.device_address();
                 keyboard_driver
                     .add_device(device_descriptor, address)
                     .unwrap();
@@ -632,7 +635,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             });
         let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
         let slot_id = self.slot_id();
-        log::debug!("start awaiting transfer event");
         let trb = EventRing::get_received_transfer_trb_on_slot(
             event_ring,
             &mut interrupter,
