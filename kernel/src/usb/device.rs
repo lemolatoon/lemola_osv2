@@ -608,6 +608,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             .set_trb_transfer_length(buf.len() as u32)
             .set_td_size(0);
         transfer_ring.push(transfer::Allowed::Normal(normal));
+        transfer_ring.dump_state();
 
         let mut registers = self.registers.lock();
         registers

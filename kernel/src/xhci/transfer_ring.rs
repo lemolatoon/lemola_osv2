@@ -9,6 +9,7 @@ use crate::alloc::alloc::{
     GlobalAllocator,
 };
 use crate::memory::PAGE_SIZE;
+use crate::{serial_print, serial_println};
 
 use super::trb::TrbRaw;
 
@@ -78,6 +79,21 @@ impl TransferRing<&'static GlobalAllocator> {
         self.cycle_bit = !self.cycle_bit;
     }
 
+    pub fn dump_state(&self) {
+        serial_print!("DEBUG: cycle bits: ");
+        self.trb_buffer
+            .iter()
+            .map(|trb| trb.cycle_bit())
+            .for_each(|bit| {
+                if bit {
+                    serial_print!("1");
+                } else {
+                    serial_print!("0");
+                }
+            });
+        serial_println!();
+    }
+
     pub fn push(&mut self, mut cmd: transfer::Allowed) -> *mut TrbRaw {
         log::debug!("write cycle_bit: {}", self.cycle_bit);
         log::debug!(
@@ -99,7 +115,13 @@ impl TransferRing<&'static GlobalAllocator> {
             log::debug!("end of the ring");
             // reached end of the ring
             let mut link = trb::Link::new();
+            link.set_ring_segment_pointer(self.trb_buffer.as_ptr() as u64);
             link.set_toggle_cycle();
+            if self.cycle_bit {
+                link.set_cycle_bit();
+            } else {
+                link.clear_cycle_bit();
+            }
             self.trb_buffer[self.write_index]
                 .write_in_order(TrbRaw::new_unchecked(link.into_raw()));
 
