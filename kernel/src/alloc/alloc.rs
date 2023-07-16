@@ -6,7 +6,7 @@ use core::{
 };
 use spin::Mutex;
 
-const HEAP_SIZE: usize = 1 << 20;
+const HEAP_SIZE: usize = 1 << 22;
 struct FixedLengthAllocatorInner<const SIZE: usize> {
     heap: [u8; SIZE],
     next: usize,
@@ -118,7 +118,7 @@ pub fn alloc_array_with_boundary<T>(
     alignment: usize,
     boundary: usize,
 ) -> Result<Box<[MaybeUninit<T>]>, LayoutError> {
-    let size = len * core::mem::size_of::<*mut T>();
+    let size = len * core::mem::size_of::<T>();
     let layout = Layout::from_size_align(size, alignment)?;
     let array_pointer = alloc_with_boundary_raw(layout, boundary) as *mut MaybeUninit<T>;
     debug_assert!(!array_pointer.is_null());
@@ -132,16 +132,12 @@ pub fn alloc_array_with_boundary_with_default_else<T>(
     boundary: usize,
     default: impl Fn() -> T,
 ) -> Result<Box<[T]>, LayoutError> {
-    let size = len * core::mem::size_of::<*mut T>();
-    let layout = Layout::from_size_align(size, alignment)?;
-    let array_pointer = alloc_with_boundary_raw(layout, boundary) as *mut MaybeUninit<T>;
-    debug_assert!(!array_pointer.is_null());
-    let slice = unsafe { core::slice::from_raw_parts_mut(array_pointer, len) };
-    for val in slice.iter_mut() {
+    let mut uninit_array = alloc_array_with_boundary::<T>(len, alignment, boundary)?;
+    for val in uninit_array.iter_mut() {
         unsafe { val.as_mut_ptr().write(default()) };
     }
-    // Safety: slice is initialized
-    Ok(unsafe { Box::from_raw(slice as *mut [core::mem::MaybeUninit<T>] as *mut [T]) })
+    // Safety: array is initialized
+    Ok(unsafe { uninit_array.assume_init() })
 }
 
 #[global_allocator]
