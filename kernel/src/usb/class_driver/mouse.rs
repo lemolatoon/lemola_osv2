@@ -54,6 +54,11 @@ fn ep_for_mouse(buf: &[u8]) -> Option<EndpointInfo<'_>> {
                 interface_found = None;
             }
         } else if let DescriptorRef::Endpoint(edesc) = desc {
+            match (edesc.b_endpoint_address >> 7, edesc.bm_attributes & 3) {
+                // Interrupt IN endpoint
+                (1, 3) => {}
+                _ => continue,
+            }
             if let Some(interface_num) = interface_found {
                 return Some(EndpointInfo {
                     interface_num,

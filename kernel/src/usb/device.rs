@@ -22,7 +22,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
-        class_driver::keyboard,
+        class_driver::{keyboard, mouse},
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },
@@ -271,7 +271,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                     log::info!("keyboard input: {:?}, {:?}", address, buf);
                 }
                 let mut keyboard_driver = keyboard::BootKeyboardDriver::new_boot_keyboard(callback);
-                // let mut keyboard_driver = bootkbd::BootKeyboard::new(callback);
                 let mut count = 1;
                 let address = endpoint_descriptor.unwrap().b_endpoint_address;
                 keyboard_driver
@@ -287,6 +286,20 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             }
 
             if let Some(_mouse_interface) = mouse_interface {
+                fn callback(address: u8, buf: &[u8]) {
+                    log::info!("mouse input: {:?}, {:?}", address, buf);
+                }
+                let mut keyboard_driver = mouse::MouseDriver::new_mouse(callback);
+                let mut count = 1;
+                let address = endpoint_descriptor.unwrap().b_endpoint_address;
+                keyboard_driver
+                    .add_device(device_descriptor, address)
+                    .unwrap();
+                loop {
+                    log::debug!("tick: {}", count);
+                    keyboard_driver.tick(count, self).unwrap();
+                    count += 10;
+                }
             } else {
                 log::warn!("no mouse interface found");
             }
