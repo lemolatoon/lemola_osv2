@@ -1,14 +1,12 @@
 use core::{alloc::Allocator, cmp};
 
 extern crate alloc;
-use alloc::{alloc::Global, boxed::Box, sync::Arc};
-use kernel_lib::{alloc::FixedLengthAllocator, await_sync};
-use usb_host::{SetupPacket, USBHost};
+use alloc::{boxed::Box, sync::Arc};
+use kernel_lib::await_sync;
 use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
-    registers,
     ring::trb::{self, event},
     ExtendedCapability,
 };

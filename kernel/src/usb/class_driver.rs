@@ -78,6 +78,7 @@ where
     /// `address` is the address of the USB device which received the
     /// report and `buffer` is the contents of the report itself.
     pub fn new(callback: F, endpoint_searcher: EndpointSearcher) -> Self {
+        #[allow(clippy::uninit_assumed_init)]
         let mut devices: [Option<_>; MAX_DEVICES] = unsafe { MaybeUninit::uninit().assume_init() };
         devices.iter_mut().for_each(|d| *d = None);
         Self {
@@ -274,6 +275,7 @@ impl<
                 // TODO: do a real allocation later. For now, keep a
                 // large-ish static buffer and take an appropriately
                 // sized slice into it for the transfer.
+                #[allow(clippy::uninit_assumed_init)]
                 let mut config =
                     unsafe { MaybeUninit::<[u8; CONFIG_BUFFER_LEN]>::uninit().assume_init() };
                 if CONFIG_BUFFER_LEN < conf_desc.w_total_length as usize {

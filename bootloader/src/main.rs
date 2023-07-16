@@ -88,8 +88,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             }
             Ok(Some(_)) => continue,
             Ok(None) => {
-                panic!("There's no entry in root_dir");
-                return Status::ABORTED;
+                panic!("There's no entry in root_dir")
             }
             Err(err) => {
                 panic!("Failed to read_entry, {:?}", err);

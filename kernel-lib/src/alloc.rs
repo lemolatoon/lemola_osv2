@@ -4,10 +4,7 @@ use core::{
 };
 
 extern crate alloc;
-use alloc::{
-    alloc::{alloc, Global},
-    boxed::Box,
-};
+use alloc::boxed::Box;
 use spin::Mutex;
 
 struct FixedLengthAllocatorInner<const SIZE: usize> {
@@ -176,8 +173,6 @@ pub fn alloc_array_with_boundary_with_default_else<const SIZE: usize, T>(
 
 #[cfg(test)]
 mod tests {
-    use core::mem::ManuallyDrop;
-    use std::eprintln;
 
     use super::*;
     #[test]

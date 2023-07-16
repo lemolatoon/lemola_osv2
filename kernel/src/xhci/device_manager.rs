@@ -2,7 +2,6 @@ extern crate alloc;
 use core::alloc::Allocator;
 use core::panic;
 
-use alloc::alloc::Global;
 use alloc::sync::Arc;
 use alloc::{boxed::Box, vec::Vec};
 use spin::Mutex;
@@ -75,7 +74,7 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
         let command_ring = Arc::clone(&self.command_ring);
-        self.device_context_array.device_context_infos[slot_id] = Some(DeviceContextInfo::blank(
+        self.device_context_array.device_context_infos[slot_id] = Some(DeviceContextInfo::new(
             port_index,
             slot_id,
             registers,

@@ -1,13 +1,8 @@
-use core::panic;
-
 extern crate alloc;
-use alloc::vec::Vec;
-use usb_host::{DeviceDescriptor, Driver, DriverError, TransferError, USBHost};
-use xhci::context::EndpointType;
 
-use crate::usb::descriptor::{Descriptor, DescriptorIter, DescriptorRef};
+use crate::usb::descriptor::{DescriptorIter, DescriptorRef};
 
-use super::{EndpointInfo, InputOnlyDevice, InputOnlyDriver};
+use super::{EndpointInfo, InputOnlyDriver};
 
 // How long to wait before talking to the device again after setting
 // its address. cf §9.2.6.3 of USB 2.0
@@ -48,9 +43,9 @@ where
 /// If a boot protocol keyboard is found, return its interface number
 /// and endpoint.
 fn ep_for_bootkbd(buf: &[u8]) -> Option<EndpointInfo<'_>> {
-    let mut parser = DescriptorIter::new(buf);
+    let parser = DescriptorIter::new(buf);
     let mut interface_found = None;
-    while let Some(desc) = parser.next() {
+    for desc in parser {
         log::debug!("desc: {:?}", desc);
         if let DescriptorRef::Interface(idesc) = desc {
             if idesc.b_interface_class == 0x03

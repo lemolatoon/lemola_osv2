@@ -1,5 +1,3 @@
-use xhci::registers::PortRegisterSet;
-
 #[derive(Debug, Clone)]
 pub struct PortConfigureState {
     pub port_config_phase: [PortConfigPhase; 256],
@@ -75,22 +73,4 @@ pub enum PortConfigPhase {
     InitializingDevice,
     ConfiguringEndpoints,
     Configured,
-}
-
-pub struct PortWrapper<'a> {
-    port_idx: usize,
-    port_register: &'a mut PortRegisterSet,
-}
-
-impl<'a> PortWrapper<'a> {
-    pub fn new(port_idx: usize, port_register: &'a mut PortRegisterSet) -> Self {
-        Self {
-            port_idx,
-            port_register,
-        }
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.port_register.portsc.current_connect_status()
-    }
 }

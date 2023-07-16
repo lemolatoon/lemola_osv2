@@ -1,7 +1,7 @@
 extern crate alloc;
 use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
-use alloc::{alloc::Global, boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use kernel_lib::await_sync;
 use spin::Mutex;
 use usb_host::{
@@ -11,8 +11,7 @@ use usb_host::{
 use xhci::{
     accessor::Mapper,
     context::{
-        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte,
-        InputControlHandler, SlotHandler,
+        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte, SlotHandler,
     },
     ring::trb::{
         command, event,
@@ -23,7 +22,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
-        class_driver::{keyboard, mouse},
+        class_driver::keyboard,
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },
@@ -44,7 +43,7 @@ impl InputContextWrapper {
     }
 
     pub fn new() -> Box<Self, &'static GlobalAllocator> {
-        alloc_with_boundary_with_default_else(64, 4096, || Self::new_zeroed()).unwrap()
+        alloc_with_boundary_with_default_else(64, 4096, Self::new_zeroed).unwrap()
     }
 
     pub fn dump_input_context_control(&self) {
@@ -64,7 +63,7 @@ impl DeviceContextWrapper {
     }
 
     pub fn new() -> Box<Self, &'static GlobalAllocator> {
-        alloc_with_boundary_with_default_else(64, 4096, || Self::new_zeroed()).unwrap()
+        alloc_with_boundary_with_default_else(64, 4096, Self::new_zeroed).unwrap()
     }
 }
 
@@ -75,7 +74,6 @@ pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
     command_ring: Arc<Mutex<CommandRing>>,
     slot_id: usize,
     port_index: usize,
-    state: DeviceContextState,
     descriptors: Option<Vec<Descriptor>>,
     pub initialization_state: DeviceInitializationState,
     pub input_context: Box<InputContextWrapper, A>,
@@ -88,7 +86,7 @@ pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
 }
 
 impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
-    pub fn blank(
+    pub fn new(
         port_index: usize,
         slot_id: usize,
         registers: Arc<Mutex<xhci::Registers<M>>>,
@@ -96,6 +94,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         command_ring: Arc<Mutex<CommandRing>>,
     ) -> Self {
         const TRANSFER_RING_BUF_SIZE: usize = 32;
+        #[allow(clippy::type_complexity)]
         let mut transfer_rings: [MaybeUninit<
             Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>>,
         >; 31] = MaybeUninit::uninit_array();
@@ -118,7 +117,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             command_ring,
             slot_id,
             port_index,
-            state: DeviceContextState::Blank,
             descriptors: None,
             initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper::new(), // 0 filled
@@ -196,7 +194,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         transfer_ring_dequeue_pointer: u64,
         max_packet_size: u16,
     ) {
-        use xhci::context::EndpointType;
         use xhci::context::InputHandler;
         let endpoint_context_0_id = DeviceContextIndex::ep0();
         let endpoint0_context = self
@@ -391,7 +388,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 ring.set_doorbell_target(dci.address());
                 ring.set_doorbell_stream_id(0);
             });
-        return wait_on;
+        wait_on
     }
 
     pub fn on_transfer_event_received(&mut self, event: event::TransferEvent) {
@@ -487,7 +484,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 ));
             }
         }
-        return Ok(w_length as usize - trb.trb_transfer_length() as usize);
+        Ok(w_length as usize - trb.trb_transfer_length() as usize)
     }
 
     async fn async_in_transfer(
@@ -733,7 +730,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             .await
             .unwrap();
         log::debug!("Transferred {} bytes", length);
-        return length;
+        length
     }
 }
 
@@ -790,7 +787,14 @@ impl From<&EndpointDescriptor> for DeviceContextIndex {
 }
 
 pub const fn calc_dci(endpoint_number: u8, direct: usb_host::Direction) -> u8 {
-    endpoint_number * 2 + if endpoint_number == 0 { 1 } else { 0 }
+    endpoint_number * 2
+        + if endpoint_number == 0 {
+            1
+        } else if let usb_host::Direction::In = direct {
+            1
+        } else {
+            0
+        }
 }
 
 impl EndpointId {
@@ -843,7 +847,7 @@ impl usb_host::Endpoint for EndpointId {
         todo!()
     }
 
-    fn set_in_toggle(&mut self, toggle: bool) {
+    fn set_in_toggle(&mut self, _toggle: bool) {
         todo!()
     }
 
@@ -851,7 +855,7 @@ impl usb_host::Endpoint for EndpointId {
         todo!()
     }
 
-    fn set_out_toggle(&mut self, toggle: bool) {
+    fn set_out_toggle(&mut self, _toggle: bool) {
         todo!()
     }
 }
@@ -886,8 +890,8 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
 
     fn out_transfer(
         &mut self,
-        ep: &mut dyn usb_host::Endpoint,
-        buf: &[u8],
+        _ep: &mut dyn usb_host::Endpoint,
+        _buf: &[u8],
     ) -> Result<usize, usb_host::TransferError> {
         todo!()
     }
@@ -924,12 +928,4 @@ impl DeviceInitializationState {
     pub fn advance(&mut self) {
         *self = self.next();
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum DeviceContextState {
-    Invalid,
-    Blank,
-    SlotAssigning,
-    SlotAssigned,
 }

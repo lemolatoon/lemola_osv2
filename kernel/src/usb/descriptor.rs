@@ -85,7 +85,7 @@ impl<'a> Iterator for DescriptorIter<'a> {
                 &self.data[self.read_bytes..self.read_bytes + next_descriptor_length],
             )
         };
-        self.read_bytes += next_descriptor_length as usize;
+        self.read_bytes += next_descriptor_length;
         Some(descriptor)
     }
 }

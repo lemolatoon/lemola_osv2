@@ -2,7 +2,6 @@ extern crate alloc;
 use core::alloc::Allocator;
 
 use alloc::boxed::Box;
-use alloc::vec::Vec;
 use xhci::ring::trb::{self, transfer};
 
 use crate::alloc::alloc::{
@@ -35,20 +34,11 @@ impl TransferRing<&'static GlobalAllocator> {
         });
         let cycle_bit = true;
         let write_index = 0;
-        let mut ring = Self {
+        Self {
             trb_buffer,
             write_index,
             cycle_bit,
-        };
-
-        // for _ in 0..ring.trb_buffer.len() {
-        //     let noop = transfer::Noop::new();
-        //     ring.push(transfer::Allowed::Noop(noop));
-        // }
-        // let noop = transfer::Noop::new();
-        // ring.push(transfer::Allowed::Noop(noop));
-
-        ring
+        }
     }
 
     pub fn alloc_new(buf_size: usize) -> Box<Self, &'static GlobalAllocator> {

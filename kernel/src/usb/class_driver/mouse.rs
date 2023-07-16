@@ -18,7 +18,7 @@ const CONFIG_BUFFER_LEN: usize = 256;
 const N_IN_TRANSFER_BYTES: usize = 3;
 
 /// Boot protocol keyboard driver for USB hosts.
-pub type MouseDriver<F: FnMut(u8, &[u8])> = InputOnlyDriver<
+pub type MouseDriver<F> = InputOnlyDriver<
     F,
     MAX_ENDPOINTS,
     SETTLE_DELAY,
@@ -41,9 +41,9 @@ where
 /// If a mouse is found, return its interface number
 /// and endpoint.
 fn ep_for_mouse(buf: &[u8]) -> Option<EndpointInfo<'_>> {
-    let mut parser = DescriptorIter::new(buf);
+    let parser = DescriptorIter::new(buf);
     let mut interface_found = None;
-    while let Some(desc) = parser.next() {
+    for desc in parser {
         if let DescriptorRef::Interface(idesc) = desc {
             if idesc.b_interface_class == 0x03
                 && idesc.b_interface_sub_class == 0x01

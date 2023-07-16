@@ -4,6 +4,7 @@
 #![feature(new_uninit)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_as_bytes)]
+#![allow(incomplete_features)]
 #![feature(adt_const_params)]
 #![feature(allocator_api)]
 pub mod alloc;

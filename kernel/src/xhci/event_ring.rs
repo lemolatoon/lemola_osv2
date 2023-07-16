@@ -237,7 +237,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
 
     fn poll(
         self: core::pin::Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
+        _cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
         // FIXME: this is safe because called member methods does not move them, but their must be a better way
         let Self {
@@ -275,7 +275,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
             },
             TransferEventWaitKind::TrbPtr(ptr) => {
                 match event_ring.pop(interrupter) {
-                    Ok(event::Allowed::TransferEvent(event)) /* if event.trb_pointer() == *ptr */ => {
+                    Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
                         log::debug!("got event: {:?}", event);
                         Poll::Ready(event)
                     }
@@ -308,7 +308,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
 
     fn poll(
         self: core::pin::Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
+        _cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
         // FIXME: this is safe because called member methods does not move them, but their must be a better way
         let Self {
