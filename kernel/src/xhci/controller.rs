@@ -691,10 +691,10 @@ where
             }
         };
         let slot_id = event.slot_id();
-        let device = self
+        let _device = self
             .device_manager
             .device_by_slot_id_mut(slot_id as usize)
             .unwrap();
-        device.on_transfer_event_received(event);
+        unreachable!()
     }
 }

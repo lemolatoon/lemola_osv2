@@ -1,7 +1,7 @@
 extern crate alloc;
 use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use kernel_lib::await_sync;
 use spin::Mutex;
 use usb_host::{
@@ -75,14 +75,10 @@ pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
     slot_id: usize,
     port_index: usize,
     descriptors: Option<Vec<Descriptor>>,
-    pub initialization_state: DeviceInitializationState,
     pub input_context: Box<InputContextWrapper, A>,
     pub device_context: Box<DeviceContextWrapper, A>,
-    pub buf: [u8; 256],
     // pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
     transfer_rings: [Option<Box<TransferRing<A>, A>>; 31],
-    /// DataStageTRB | StatusStageTRB -> SetupStageTRB
-    setup_stage_map: BTreeMap<u64, u64>,
 }
 
 impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
@@ -118,13 +114,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             slot_id,
             port_index,
             descriptors: None,
-            initialization_state: DeviceInitializationState::NotInitialized,
             input_context: InputContextWrapper::new(), // 0 filled
             device_context: DeviceContextWrapper::new(), // 0 filled
-            buf: [0; 256],
-            // event_waiting_issuer_map: BTreeMap::new(),
             transfer_rings,
-            setup_stage_map: BTreeMap::new(),
         }
     }
 
@@ -220,11 +212,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     }
 
     pub async fn start_initialization(&mut self) {
-        debug_assert_eq!(
-            self.initialization_state,
-            DeviceInitializationState::NotInitialized
-        );
-        self.initialization_state = DeviceInitializationState::Initialize1;
         let device_descriptor = self.request_device_descriptor().await;
         let buffer_len = self
             .transfer_ring_at(DeviceContextIndex::ep0())
@@ -311,10 +298,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         }
     }
 
-    pub fn buf_len(&self) -> usize {
-        self.buf.len()
-    }
-
     /// Host to Device
     pub fn push_control_transfer(
         &mut self,
@@ -347,8 +330,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 .set_index(setup_data.w_index)
                 .set_length(setup_data.w_length)
                 .set_transfer_type(TransferType::In);
-            let setup_trb_ref_in_ring =
-                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
+            transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb));
 
             let mut data_stage_trb = transfer::DataStage::new();
             data_stage_trb
@@ -362,13 +344,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 transfer_ring.push(transfer::Allowed::DataStage(data_stage_trb)) as u64;
 
             transfer_ring.push(transfer::Allowed::StatusStage(status_trb));
-            log::debug!(
-                "control_transfer: setup_trb_ref_in_ring: 0x{:x}, data_trb_ref_in_ring: 0x{:x}",
-                setup_trb_ref_in_ring,
-                data_trb_ref_in_ring
-            );
-            self.setup_stage_map
-                .insert(data_trb_ref_in_ring, setup_trb_ref_in_ring);
             data_trb_ref_in_ring
         } else {
             let mut setup_stage_trb = transfer::SetupStage::new();
@@ -379,16 +354,10 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 .set_index(setup_data.w_index)
                 .set_length(setup_data.w_length)
                 .set_transfer_type(TransferType::No);
-            let setup_trb_ref_in_ring =
-                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
+            transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb));
 
             status_trb.set_direction().set_interrupt_on_completion();
-            let status_trb_ref_in_ring =
-                transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64;
-
-            self.setup_stage_map
-                .insert(status_trb_ref_in_ring, setup_trb_ref_in_ring);
-            status_trb_ref_in_ring
+            transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64
         };
 
         let mut registers = self.registers.lock();
@@ -405,54 +374,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 ring.set_doorbell_stream_id(0);
             });
         wait_on
-    }
-
-    pub fn on_transfer_event_received(&mut self, event: event::TransferEvent) {
-        let trb_pointer = event.trb_pointer();
-        log::debug!("trb_pointer: {}", trb_pointer);
-        if trb_pointer == 0 {
-            log::debug!("Invalid trb_pointer: null");
-            return;
-        }
-        let trb: transfer::Allowed = unsafe { (trb_pointer as *const TrbRaw).read() }
-            .try_into()
-            .unwrap();
-        match trb {
-            transfer::Allowed::Normal(_) => todo!("normal"),
-            transfer::Allowed::Isoch(_) => todo!("isoch"),
-            transfer::Allowed::Link(_) => todo!("link"),
-            transfer::Allowed::EventData(_) => todo!("event data"),
-            transfer::Allowed::Noop(_) => todo!("noop"),
-            transfer::Allowed::SetupStage(_) => todo!("setup stage"),
-            transfer::Allowed::StatusStage(_) | transfer::Allowed::DataStage(_) => {
-                log::debug!("setup_stage_map: {:?}", &self.setup_stage_map);
-                let setup_stage = {
-                    let setup_trb_ref_in_ring = self
-                        .setup_stage_map
-                        .remove(&trb_pointer)
-                        .expect("setup stage trb not found")
-                        as *const TrbRaw;
-                    let transfer::Allowed::SetupStage(setup_stage): transfer::Allowed =
-                        unsafe { setup_trb_ref_in_ring.read() }.try_into().unwrap()
-                    else {
-                        log::error!("there must be setup stage. at {:?}", trb_pointer);
-                        panic!("there must be setup stage. at {:?}", trb_pointer);
-                    };
-                    setup_stage
-                };
-
-                log::debug!("setup_stage: {:?}", setup_stage);
-                let mut device_descriptor: MaybeUninit<DeviceDescriptor> = MaybeUninit::uninit();
-                let device_descriptor = unsafe {
-                    device_descriptor
-                        .as_mut_ptr()
-                        .copy_from_nonoverlapping(self.buf.as_ptr().cast(), 1);
-                    device_descriptor.assume_init()
-                };
-                log::debug!("device_descriptor: {:?}", device_descriptor);
-            }
-        }
-        todo!()
     }
 
     pub async fn async_control_transfer(
@@ -910,38 +831,5 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         _buf: &[u8],
     ) -> Result<usize, usb_host::TransferError> {
         todo!()
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum DeviceInitializationState {
-    NotInitialized,
-    Initialize1,
-    Initialize2,
-    Initialize3,
-    Initialized,
-}
-
-impl DeviceInitializationState {
-    pub fn next(&self) -> Self {
-        match self {
-            Self::NotInitialized => Self::Initialize1,
-            Self::Initialize1 => Self::Initialize2,
-            Self::Initialize2 => Self::Initialize3,
-            Self::Initialize3 => Self::Initialized,
-            Self::Initialized => Self::Initialized,
-        }
-    }
-
-    pub fn is_initialized(&self) -> bool {
-        matches!(self, Self::Initialized)
-    }
-
-    pub fn is_initializing(&self) -> bool {
-        !matches!(self, Self::NotInitialized | Self::Initialized)
-    }
-
-    pub fn advance(&mut self) {
-        *self = self.next();
     }
 }
