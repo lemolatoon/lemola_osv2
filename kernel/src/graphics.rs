@@ -226,27 +226,25 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
     pixcel_writer
 }
 
-pub struct SerialAndVgaCharWriterInner;
-pub struct SerialAndVgaCharWriter {
-    inner: Cell<SerialAndVgaCharWriterInner>,
-}
+pub struct SerialAndVgaCharWriter;
+
 impl SerialAndVgaCharWriter {
     pub const fn new() -> Self {
-        Self {
-            inner: Cell::new(SerialAndVgaCharWriterInner),
-        }
+        Self {}
     }
 }
-// Safety: SerialAndVgaCharWriterInner is not actually mutable. It is just call outer `println!` and `serial_println!`.
-//         and in `println!`, `serial_println!` static variables are wrapped by `Mutex`
-unsafe impl Sync for SerialAndVgaCharWriter {}
-unsafe impl Send for SerialAndVgaCharWriter {}
 static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter::new();
-impl fmt::Write for SerialAndVgaCharWriterInner {
+struct InstantWriter<F: Fn(&str)> {
+    f: F,
+}
+impl<F: Fn(&str)> InstantWriter<F> {
+    pub fn new(f: F) -> Self {
+        Self { f }
+    }
+}
+impl<F: Fn(&str)> fmt::Write for InstantWriter<F> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        use crate::print;
-        print!("{}", s);
-        serial_print!("{}", s);
+        (self.f)(s);
         Ok(())
     }
 }
@@ -257,15 +255,30 @@ impl log::Log for SerialAndVgaCharWriter {
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            let writer = self.inner.as_ptr();
-            DecoratedLog::write(
-                unsafe { writer.as_mut().unwrap_unchecked() },
-                record.level(),
-                record.args(),
-                record.file().unwrap_or("<unknown>"),
-                record.line().unwrap_or(0),
-            )
-            .unwrap();
+            if record.level() <= log::Level::Info {
+                let mut serial_vga_writer = InstantWriter::new(|s| {
+                    serial_print!("{}", s);
+                    crate::print!("{}", s)
+                });
+                DecoratedLog::write(
+                    &mut serial_vga_writer,
+                    record.level(),
+                    record.args(),
+                    record.file().unwrap_or("<unknown>"),
+                    record.line().unwrap_or(0),
+                )
+                .unwrap();
+            } else {
+                let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
+                DecoratedLog::write(
+                    &mut serial_writer,
+                    record.level(),
+                    record.args(),
+                    record.file().unwrap_or("<unknown>"),
+                    record.line().unwrap_or(0),
+                )
+                .unwrap();
+            }
         }
     }
 
