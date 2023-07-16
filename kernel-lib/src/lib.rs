@@ -1,5 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![feature(new_uninit)]
+#![feature(allocator_api)]
+#![feature(generic_arg_infer)]
 
+pub mod alloc;
 pub mod futures;
 pub mod logger;
 pub mod render;

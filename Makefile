@@ -34,7 +34,7 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel
 run: disk.img
 	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
-		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
+		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw,readonly \
 		-drive file=disk.img,format=raw \
 		-device nec-usb-xhci,id=xhci \
 		-device usb-kbd \

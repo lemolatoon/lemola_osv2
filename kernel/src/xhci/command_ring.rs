@@ -2,14 +2,14 @@ extern crate alloc;
 use alloc::boxed::Box;
 use xhci::ring::trb::{self, command};
 
-use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
+use crate::alloc::alloc::{alloc_array_with_boundary_with_default_else, GlobalAllocator};
 use crate::memory::PAGE_SIZE;
 
 use super::trb::TrbRaw;
 
 #[derive(Debug)]
 pub struct CommandRing {
-    trb_buffer: Box<[TrbRaw]>,
+    trb_buffer: Box<[TrbRaw], &'static GlobalAllocator>,
     write_index: usize,
     cycle_bit: bool,
 }

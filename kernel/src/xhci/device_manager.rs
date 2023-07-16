@@ -1,31 +1,33 @@
 extern crate alloc;
+use core::alloc::Allocator;
 use core::panic;
 
+use alloc::alloc::Global;
 use alloc::sync::Arc;
 use alloc::{boxed::Box, vec::Vec};
 use spin::Mutex;
 use xhci::accessor::Mapper;
 use xhci::context::Device32Byte;
 
-use crate::alloc::alloc::alloc_array_with_boundary_with_default_else;
+use crate::alloc::alloc::{alloc_array_with_boundary_with_default_else, GlobalAllocator};
 use crate::memory::PAGE_SIZE;
 use crate::usb::device::DeviceContextInfo;
 
 use super::event_ring::EventRing;
 
 #[derive(Debug)]
-pub struct DeviceManager<M: Mapper + Clone> {
+pub struct DeviceManager<M: Mapper + Clone, A: Allocator> {
     /// len is max_slots_enabled
-    device_context_array: DeviceContextArray<M>,
+    device_context_array: DeviceContextArray<M, A>,
     registers: Arc<Mutex<xhci::Registers<M>>>,
-    event_ring: Arc<Mutex<EventRing>>,
+    event_ring: Arc<Mutex<EventRing<A>>>,
 }
 
-impl<M: Mapper + Clone> DeviceManager<M> {
+impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
     pub fn new(
         max_slots: u8,
         registers: Arc<Mutex<xhci::Registers<M>>>,
-        event_ring: Arc<Mutex<EventRing>>,
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     ) -> Self {
         Self {
             registers,
@@ -34,7 +36,10 @@ impl<M: Mapper + Clone> DeviceManager<M> {
         }
     }
 
-    pub fn set_scratchpad_buffer_array(&mut self, ptr_head: Box<[*mut [u8; PAGE_SIZE]]>) {
+    pub fn set_scratchpad_buffer_array(
+        &mut self,
+        ptr_head: Box<[*mut [u8; PAGE_SIZE]], impl core::alloc::Allocator>,
+    ) {
         // This pointer cast is safe, because it is based on xhci specification
         self.device_context_array.device_contexts[0] =
             Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device32Byte;
@@ -48,7 +53,7 @@ impl<M: Mapper + Clone> DeviceManager<M> {
         &mut self,
         port_index: usize,
         slot_id: usize,
-    ) -> &mut DeviceContextInfo<M> {
+    ) -> &mut DeviceContextInfo<M, &'static GlobalAllocator> {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
                 "slot_id is out of range: {} / {}",
@@ -73,11 +78,17 @@ impl<M: Mapper + Clone> DeviceManager<M> {
             .unwrap()
     }
 
-    pub fn device_by_slot_id(&self, slot_id: usize) -> Option<&DeviceContextInfo<M>> {
+    pub fn device_by_slot_id(
+        &self,
+        slot_id: usize,
+    ) -> Option<&DeviceContextInfo<M, &'static GlobalAllocator>> {
         self.device_context_array.device_context_infos[slot_id].as_ref()
     }
 
-    pub fn device_by_slot_id_mut(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo<M>> {
+    pub fn device_by_slot_id_mut(
+        &mut self,
+        slot_id: usize,
+    ) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
         self.device_context_array.device_context_infos[slot_id].as_mut()
     }
 
@@ -95,12 +106,12 @@ impl<M: Mapper + Clone> DeviceManager<M> {
 }
 
 #[derive(Debug)]
-struct DeviceContextArray<M: Mapper + Clone> {
-    device_contexts: Box<[*mut Device32Byte]>,
-    device_context_infos: Vec<Option<DeviceContextInfo<M>>>,
+struct DeviceContextArray<M: Mapper + Clone, A: Allocator> {
+    device_contexts: Box<[*mut Device32Byte], A>,
+    device_context_infos: Vec<Option<DeviceContextInfo<M, A>>>,
 }
 
-impl<M: Mapper + Clone> DeviceContextArray<M> {
+impl<M: Mapper + Clone> DeviceContextArray<M, &'static GlobalAllocator> {
     pub fn new(max_slots: u8) -> Self {
         let device_contexts_len = max_slots as usize + 1;
         const ALIGNMENT: usize = 64;

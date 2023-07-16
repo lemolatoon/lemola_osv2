@@ -1,7 +1,7 @@
 extern crate alloc;
-use core::{mem::MaybeUninit, ptr::NonNull};
+use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{alloc::Global, boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use kernel_lib::await_sync;
 use spin::Mutex;
 use usb_host::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Driver, SetupPacket};
@@ -18,6 +18,7 @@ use xhci::{
 };
 
 use crate::{
+    alloc::alloc::GlobalAllocator,
     usb::{
         class_driver::{keyboard, mouse},
         descriptor::DescriptorIter,
@@ -43,9 +44,9 @@ impl InputContextWrapper {
 pub struct DeviceContextWrapper(pub Device32Byte);
 
 #[derive(Debug)]
-pub struct DeviceContextInfo<M: Mapper + Clone> {
+pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
-    event_ring: Arc<Mutex<EventRing>>,
+    event_ring: Arc<Mutex<EventRing<A>>>,
     slot_id: usize,
     port_index: usize,
     state: DeviceContextState,
@@ -55,21 +56,22 @@ pub struct DeviceContextInfo<M: Mapper + Clone> {
     pub device_context: DeviceContextWrapper,
     pub buf: [u8; 256],
     // pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
-    transfer_rings: [Option<Box<TransferRing>>; 31],
+    transfer_rings: [Option<Box<TransferRing<A>, A>>; 31],
     /// DataStageTRB | StatusStageTRB -> SetupStageTRB
     setup_stage_map: BTreeMap<u64, u64>,
 }
 
-impl<M: Mapper + Clone> DeviceContextInfo<M> {
+impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn blank(
         port_index: usize,
         slot_id: usize,
         registers: Arc<Mutex<xhci::Registers<M>>>,
-        event_ring: Arc<Mutex<EventRing>>,
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     ) -> Self {
         const TRANSFER_RING_BUF_SIZE: usize = 32;
-        let mut transfer_rings: [MaybeUninit<Option<Box<TransferRing>>>; 31] =
-            MaybeUninit::uninit_array();
+        let mut transfer_rings: [MaybeUninit<
+            Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>>,
+        >; 31] = MaybeUninit::uninit_array();
         for transfer_ring in transfer_rings.iter_mut() {
             unsafe {
                 transfer_ring.as_mut_ptr().write(None);
@@ -77,7 +79,10 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         }
         let mut transfer_rings = unsafe {
             // assume init
-            core::mem::transmute::<_, [Option<Box<TransferRing>>; 31]>(transfer_rings)
+            core::mem::transmute::<
+                _,
+                [Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>>; 31],
+            >(transfer_rings)
         };
         transfer_rings[0] = Some(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE));
         Self {
@@ -144,14 +149,17 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             .endpoint_mut(dci.address() as usize)
     }
 
-    pub fn transfer_ring_at(&self, dci: DeviceContextIndex) -> &Option<Box<TransferRing>> {
+    pub fn transfer_ring_at(
+        &self,
+        dci: DeviceContextIndex,
+    ) -> &Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>> {
         &self.transfer_rings[dci.address() as usize - 1]
     }
 
     pub fn transfer_ring_at_mut(
         &mut self,
         dci: DeviceContextIndex,
-    ) -> &mut Option<Box<TransferRing>> {
+    ) -> &mut Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>> {
         &mut self.transfer_rings[dci.address() as usize - 1]
     }
 
@@ -188,6 +196,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
         );
         self.initialization_state = DeviceInitializationState::Initialize1;
         let device_descriptor = self.request_device_descriptor().await;
+        for _ in 0..32 {
+            let device_descriptor = self.request_device_descriptor().await;
+        }
         log::debug!("device_descriptor: {:?}", device_descriptor);
         log::info!("1");
         let descriptors = self.request_config_descriptor_and_rest().await;
@@ -235,6 +246,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                     log::info!("keyboard input: {:?}, {:?}", address, buf);
                 }
                 let mut keyboard_driver = keyboard::BootKeyboardDriver::new_boot_keyboard(callback);
+                // let mut keyboard_driver = bootkbd::BootKeyboard::new(callback);
                 let mut count = 1;
                 let address = endpoint_descriptor.unwrap().b_endpoint_address;
                 keyboard_driver
@@ -314,8 +326,17 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
                 setup_trb_ref_in_ring,
                 data_trb_ref_in_ring
             );
+            log::debug!("dump3 after 3 pushes");
+            transfer_ring.dump3();
             self.setup_stage_map
                 .insert(data_trb_ref_in_ring, setup_trb_ref_in_ring);
+            let transfer_ring = self
+                .transfer_ring_at_mut(dci)
+                .as_ref()
+                .expect("transfer ring not allocated")
+                .as_ref();
+            log::debug!("dump3 after setup_stage_map insert");
+            transfer_ring.dump3();
             data_trb_ref_in_ring
         } else {
             let mut setup_stage_trb = transfer::SetupStage::new();
@@ -338,18 +359,34 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
             status_trb_ref_in_ring
         };
 
+        let transfer_ring = self
+            .transfer_ring_at_mut(dci)
+            .as_ref()
+            .expect("transfer ring not allocated")
+            .as_ref();
+        log::debug!("dump3 before registers.lock");
+        transfer_ring.dump3();
         let mut registers = self.registers.lock();
         log::debug!(
             "slot_id: {:?}, dci.address(): {}",
             self.slot_id,
             dci.address()
         );
+
         registers
             .doorbell
             .update_volatile_at(self.slot_id(), |ring| {
                 ring.set_doorbell_target(dci.address());
                 ring.set_doorbell_stream_id(0);
             });
+        drop(registers);
+        let transfer_ring = self
+            .transfer_ring_at_mut(dci)
+            .as_ref()
+            .expect("transfer ring not allocated")
+            .as_ref();
+        log::debug!("dump3 after ringing doorbell");
+        transfer_ring.dump3();
         return wait_on;
     }
 
@@ -579,7 +616,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M> {
     }
 }
 
-impl<M: Mapper + Clone> DeviceContextInfo<M> {
+impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     // request descriptor impls
 
     pub async fn request_device_descriptor(&mut self) -> DeviceDescriptor {
@@ -774,7 +811,7 @@ impl usb_host::Endpoint for EndpointId {
     }
 }
 
-impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M> {
+impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static GlobalAllocator> {
     fn control_transfer(
         &mut self,
         ep: &mut dyn usb_host::Endpoint,

@@ -27,6 +27,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc827186963e592360843fb5ba4b973e145841266c1357f7180c43526f2e5b61"
 
 [[package]]
+name = "bootkbd"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1243bb89a2e087b2e5f47252f3af1f456246c0014d4faf7191278692851257ff"
+dependencies = [
+ "log",
+ "usb-host",
+]
+
+[[package]]
 name = "common"
 version = "0.1.0"
 
@@ -51,6 +61,7 @@ name = "kernel"
 version = "0.1.0"
 dependencies = [
  "bit_field",
+ "bootkbd",
  "common",
  "gen_font",
  "kernel-lib",

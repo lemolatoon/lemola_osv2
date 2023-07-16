@@ -1,5 +1,5 @@
 extern crate alloc;
-use core::{future::Future, task::Poll};
+use core::{alloc::Allocator, future::Future, task::Poll};
 
 use alloc::{boxed::Box, sync::Arc};
 use bit_field::BitField;
@@ -14,6 +14,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{
         alloc_array_with_boundary_with_default_else, alloc_with_boundary_with_default_else,
+        GlobalAllocator,
     },
     memory::PAGE_SIZE,
     xhci::trb::TrbRaw,
@@ -30,6 +31,11 @@ const_assert_eq!(core::mem::size_of::<EventRingSegmentTableEntry>(), 64);
 impl EventRingSegmentTableEntry {
     pub fn new(ring_segment_base_address: u64, ring_segment_size: u16) -> Self {
         let mut entry = Self { data: [0; 4] };
+        log::info!(
+            "EventRingSegmentTableEntry::new: ring_segment_base_address = {:#x}, size = {}",
+            ring_segment_base_address,
+            ring_segment_size
+        );
         entry.set_ring_segment_base_address(ring_segment_base_address);
         entry.set_ring_segment_size(ring_segment_size);
         entry
@@ -60,13 +66,14 @@ impl EventRingSegmentTableEntry {
 }
 
 #[derive(Debug)]
-pub struct EventRing {
-    trb_buffer: Box<[trb::Link]>,
-    event_ring_segment_table: Box<EventRingSegmentTableEntry>,
+pub struct EventRing<A: Allocator> {
+    trb_buffer: Box<[trb::Link], A>,
+    event_ring_segment_table: Box<EventRingSegmentTableEntry, A>,
     cycle_bit: bool,
+    n_pop: usize,
 }
 
-impl EventRing {
+impl EventRing<&'static GlobalAllocator> {
     pub fn new<M: Mapper + Clone>(
         buf_size: u16,
         primary_interrupter: &mut Interrupter<'_, M, ReadWrite>,
@@ -132,6 +139,7 @@ impl EventRing {
             event_ring_segment_table,
             trb_buffer,
             cycle_bit,
+            n_pop: 0,
         }
     }
 
@@ -143,6 +151,8 @@ impl EventRing {
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Result<event::Allowed, TrbRaw> {
+        log::debug!("pop: n_pop: {} / {}", self.n_pop, self.trb_buffer.len());
+        self.n_pop += 1;
         let dequeue_pointer = interrupter
             .erdp
             .read_volatile()
@@ -158,6 +168,7 @@ impl EventRing {
         };
 
         if next == segment_end {
+            log::debug!("reached segment end.");
             next = segment_begin;
             self.cycle_bit = !self.cycle_bit;
         }
@@ -170,7 +181,7 @@ impl EventRing {
     }
 
     pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone>(
-        event_ring: Arc<Mutex<EventRing>>,
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
         slot_id: u8,
     ) -> trb::event::TransferEvent {
@@ -183,7 +194,7 @@ impl EventRing {
     }
 
     pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone>(
-        event_ring: Arc<Mutex<EventRing>>,
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
         trb_pointer: u64,
     ) -> trb::event::TransferEvent {
@@ -197,7 +208,7 @@ impl EventRing {
     }
 
     pub async fn get_received_command_trb<M: Mapper + Clone>(
-        event_ring: Arc<Mutex<EventRing>>,
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> trb::event::CommandCompletion {
         CommandCompletionFuture {
@@ -214,7 +225,7 @@ enum TransferEventWaitKind {
 }
 
 struct TransferEventFuture<'a, 'b, M: Mapper + Clone> {
-    pub event_ring: Arc<Mutex<EventRing>>,
+    pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
     pub wait_on: TransferEventWaitKind,
 }
@@ -285,7 +296,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
 }
 
 struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone> {
-    pub event_ring: Arc<Mutex<EventRing>>,
+    pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
 }
 

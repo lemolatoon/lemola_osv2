@@ -293,7 +293,6 @@ impl<
                     0,
                     Some(config_buf),
                 )?;
-                panic!();
                 assert!(len == conf_desc.w_total_length as usize);
                 let EndpointInfo {
                     interface_num,

@@ -5,7 +5,7 @@ use kernel_lib::alloc::FixedLengthAllocator;
 
 const HEAP_SIZE: usize = 1 << 22;
 
-type GlobalAllocator = FixedLengthAllocator<HEAP_SIZE>;
+pub type GlobalAllocator = FixedLengthAllocator<HEAP_SIZE>;
 
 #[global_allocator]
 static ALLOCATOR: GlobalAllocator = GlobalAllocator::new();

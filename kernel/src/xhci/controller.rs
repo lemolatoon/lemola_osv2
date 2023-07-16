@@ -1,8 +1,8 @@
-use core::cmp;
+use core::{alloc::Allocator, cmp};
 
 extern crate alloc;
-use alloc::{boxed::Box, sync::Arc};
-use kernel_lib::await_sync;
+use alloc::{alloc::Global, boxed::Box, sync::Arc};
+use kernel_lib::{alloc::FixedLengthAllocator, await_sync};
 use usb_host::{SetupPacket, USBHost};
 use xhci::{
     accessor::Mapper,
@@ -13,7 +13,7 @@ use xhci::{
 };
 
 use crate::{
-    alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary},
+    alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
     usb::device::DeviceContextIndex,
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
@@ -26,19 +26,20 @@ use super::{
 };
 
 #[derive(Debug)]
-pub struct XhciController<M>
+pub struct XhciController<M, A>
 where
     M: Mapper + Clone,
+    A: Allocator,
 {
     registers: Arc<Mutex<xhci::Registers<M>>>,
-    device_manager: DeviceManager<M>,
+    device_manager: DeviceManager<M, A>,
     command_ring: CommandRing,
-    event_ring: Arc<Mutex<EventRing>>,
+    event_ring: Arc<Mutex<EventRing<A>>>,
     number_of_ports: u8,
     port_configure_state: PortConfigureState,
 }
 
-impl<M> XhciController<M>
+impl<M> XhciController<M, &'static GlobalAllocator>
 where
     M: Mapper + Clone,
 {
@@ -422,8 +423,8 @@ where
 
     fn configure_device_context(
         registers: &Arc<Mutex<xhci::Registers<M>>>,
-        event_ring: Arc<Mutex<EventRing>>,
-    ) -> DeviceManager<M> {
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+    ) -> DeviceManager<M, &'static GlobalAllocator> {
         let cloned_registers = Arc::clone(registers);
         let registers = &mut *registers.lock();
         let capability = &registers.capability;
@@ -521,7 +522,7 @@ where
     }
 }
 
-impl<M> XhciController<M>
+impl<M> XhciController<M, &'static GlobalAllocator>
 where
     M: Mapper + Clone,
 {

@@ -9,6 +9,10 @@ impl TrbRaw {
         TrbRaw(raw)
     }
 
+    pub fn cycle_bit(&self) -> bool {
+        unsafe { core::mem::transmute::<_, trb::Link>(self.clone().into_raw()) }.cycle_bit()
+    }
+
     /// # Safety
     /// `ptr` must be a valid pointer as `[u32; 4]`.
     pub unsafe fn new_from_ptr(ptr: *const [u32; 4]) -> Self {
@@ -21,7 +25,7 @@ impl TrbRaw {
 
     pub fn write_in_order(&mut self, another: Self) {
         for (dst, src) in self.0.iter_mut().zip(another.into_raw()) {
-            *dst = src;
+            unsafe { (dst as *mut u32).write_volatile(src) };
         }
     }
 }

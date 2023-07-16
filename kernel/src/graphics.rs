@@ -245,7 +245,7 @@ static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter::new()
 impl fmt::Write for SerialAndVgaCharWriterInner {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         use crate::print;
-        print!("{}", s);
+        // print!("{}", s);
         serial_print!("{}", s);
         Ok(())
     }
