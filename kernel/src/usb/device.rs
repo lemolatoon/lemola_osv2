@@ -5,8 +5,7 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use kernel_lib::await_sync;
 use spin::Mutex;
 use usb_host::{
-    ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Driver, EndpointDescriptor,
-    SetupPacket,
+    ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, SetupPacket,
 };
 use xhci::{
     accessor::Mapper,
@@ -22,7 +21,6 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
-        class_driver::{callbacks, keyboard, mouse},
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
     },

@@ -16,7 +16,7 @@ use crate::{
     memory::PAGE_SIZE,
     usb::{
         class_driver::ClassDriverManager,
-        device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
+        device::{DeviceContextIndex, InputContextWrapper},
     },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
@@ -178,7 +178,7 @@ where
         let mut event_ring = self.event_ring.lock();
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
-            while let Some(trb) = event_ring.pop_already_popped() {
+            if let Some(trb) = event_ring.pop_already_popped() {
                 drop(event_ring);
                 drop(registers);
                 self.process_event_ring_event(trb, class_drivers);
