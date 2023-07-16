@@ -210,10 +210,12 @@ impl EventRing<&'static GlobalAllocator> {
     pub async fn get_received_command_trb<M: Mapper + Clone>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        trb_ptr: u64,
     ) -> trb::event::CommandCompletion {
         CommandCompletionFuture {
             event_ring,
             interrupter,
+            wait_on: trb_ptr,
         }
         .await
     }
@@ -298,6 +300,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
 struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+    pub wait_on: u64, // trb_ptr
 }
 
 impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
@@ -311,6 +314,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
         let Self {
             interrupter,
             event_ring,
+            wait_on,
         } = unsafe { self.get_unchecked_mut() };
         let event_ring_trb = unsafe {
             (interrupter
@@ -325,7 +329,11 @@ impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
             return Poll::Pending;
         }
         match event_ring.pop(interrupter) {
-            Ok(event::Allowed::CommandCompletion(event)) => Poll::Ready(event),
+            Ok(event::Allowed::CommandCompletion(event))
+                if event.command_trb_pointer() == *wait_on =>
+            {
+                Poll::Ready(event)
+            }
             Ok(trb) => {
                 // EventRing does not have front
                 log::info!("ignoring...: {:?}", trb);

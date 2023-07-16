@@ -60,7 +60,7 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn fill_with_normal(&mut self) {
-        for _ in 0..self.trb_buffer.len() / 3 - 1 {
+        for _ in 0..self.trb_buffer.len() / 2 - 1 {
             let mut normal = transfer::Normal::new();
             const BUF_LENGTH: usize = 4096;
             let buffer =
@@ -89,50 +89,21 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn push(&mut self, mut cmd: transfer::Allowed) -> *mut TrbRaw {
-        // log::debug!(
-        //     "cycle bits:\n {:?}",
-        //     self.trb_buffer
-        //         .iter()
-        //         .map(|trb| trb.cycle_bit())
-        //         .collect::<Vec<bool>>()
-        // );
-        log::debug!("cycle bit: {}", self.cycle_bit);
+        log::debug!("write cycle_bit: {}", self.cycle_bit);
+        log::debug!(
+            "trb_buffer: [{:p} - {:p}]",
+            self.trb_buffer.as_ptr(),
+            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
+        );
         if self.cycle_bit {
             cmd.set_cycle_bit();
         } else {
             cmd.clear_cycle_bit();
         }
-        log::debug!("trb: {:x?}", cmd.into_raw());
-        if self.write_index > 0 {
-            let trb_before = unsafe {
-                (&self.trb_buffer[self.write_index - 1] as *const TrbRaw).read_volatile()
-            };
-            log::debug!("BEFORE write: trb before: {:x?}", trb_before);
-        }
         self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
-        let cycle_bit_written = unsafe {
-            (&self.trb_buffer[self.write_index] as *const TrbRaw)
-                .read_volatile()
-                .cycle_bit()
-        };
-        if self.write_index > 0 {
-            let trb_before = unsafe {
-                (&self.trb_buffer[self.write_index - 1] as *const TrbRaw).read_volatile()
-            };
-            log::debug!("AFTER write: trb before: {:x?}", trb_before);
-        }
-        log::debug!("cycle bit written: {}", cycle_bit_written);
-        log::debug!(
-            "transfer ring trb ptr: {:p}",
-            &self.trb_buffer[self.write_index]
-        );
 
         let trb_ptr = &mut self.trb_buffer[self.write_index] as *mut TrbRaw;
-        log::debug!(
-            "write_index: {} / {}",
-            self.write_index,
-            self.trb_buffer.len() - 1
-        );
+        log::debug!("writing trb_ptr: {:p}", trb_ptr);
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
             log::debug!("end of the ring");

@@ -11,8 +11,9 @@ use xhci::context::Device32Byte;
 
 use crate::alloc::alloc::{alloc_array_with_boundary_with_default_else, GlobalAllocator};
 use crate::memory::PAGE_SIZE;
-use crate::usb::device::DeviceContextInfo;
+use crate::usb::device::{DeviceContextInfo, DeviceContextWrapper};
 
+use super::command_ring::CommandRing;
 use super::event_ring::EventRing;
 
 #[derive(Debug)]
@@ -21,6 +22,7 @@ pub struct DeviceManager<M: Mapper + Clone, A: Allocator> {
     device_context_array: DeviceContextArray<M, A>,
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
+    command_ring: Arc<Mutex<CommandRing>>,
 }
 
 impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
@@ -28,11 +30,13 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         max_slots: u8,
         registers: Arc<Mutex<xhci::Registers<M>>>,
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+        command_ring: Arc<Mutex<CommandRing>>,
     ) -> Self {
         Self {
             registers,
             device_context_array: DeviceContextArray::new(max_slots),
             event_ring,
+            command_ring,
         }
     }
 
@@ -70,8 +74,13 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
 
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
+        let command_ring = Arc::clone(&self.command_ring);
         self.device_context_array.device_context_infos[slot_id] = Some(DeviceContextInfo::blank(
-            port_index, slot_id, registers, event_ring,
+            port_index,
+            slot_id,
+            registers,
+            event_ring,
+            command_ring,
         ));
         self.device_context_array.device_context_infos[slot_id]
             .as_mut()
@@ -100,8 +109,9 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         let device_context_info = self.device_context_array.device_context_infos[slot_id]
             .as_mut()
             .unwrap();
-        self.device_context_array.device_contexts[slot_id] =
-            &mut device_context_info.device_context.0 as *mut Device32Byte;
+        self.device_context_array.device_contexts[slot_id] = &*device_context_info.device_context
+            as *const DeviceContextWrapper
+            as *mut Device32Byte;
     }
 }
 

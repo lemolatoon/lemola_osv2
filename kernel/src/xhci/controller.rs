@@ -8,6 +8,7 @@ use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
+    registers,
     ring::trb::{self, event},
     ExtendedCapability,
 };
@@ -15,7 +16,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
-    usb::device::DeviceContextIndex,
+    usb::device::{DeviceContextIndex, InputContextWrapper},
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
 use spin::{Mutex, MutexGuard};
@@ -33,7 +34,7 @@ where
 {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     device_manager: DeviceManager<M, A>,
-    command_ring: CommandRing,
+    command_ring: Arc<Mutex<CommandRing>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     number_of_ports: u8,
     port_configure_state: PortConfigureState,
@@ -104,18 +105,22 @@ where
         )));
         log::debug!("[XHCI] initialize event ring");
 
-        // This is clippy's bug
-        #[allow(clippy::arc_with_non_send_sync)]
-        let arc_registers = Arc::new(Mutex::new(registers));
-        let device_manager =
-            Self::configure_device_context(&arc_registers, Arc::clone(&event_ring));
-        log::debug!("[XHCI] configure device context");
-        let mut registers = arc_registers.lock();
-
         const COMMAND_RING_BUF_SIZE: usize = 32;
         let command_ring = CommandRing::new(COMMAND_RING_BUF_SIZE);
         Self::register_command_ring(&mut registers, &command_ring);
+        let command_ring = Arc::new(Mutex::new(command_ring));
         log::debug!("[XHCI] register command ring");
+
+        // This is clippy's bug
+        #[allow(clippy::arc_with_non_send_sync)]
+        let arc_registers = Arc::new(Mutex::new(registers));
+        let device_manager = Self::configure_device_context(
+            &arc_registers,
+            Arc::clone(&event_ring),
+            Arc::clone(&command_ring),
+        );
+        log::debug!("[XHCI] configure device context");
+        let mut registers = arc_registers.lock();
 
         // enable interrupt for the primary interrupter
         let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
@@ -288,7 +293,7 @@ where
 
             let enable_slot_cmd =
                 trb::command::Allowed::EnableSlot(trb::command::EnableSlot::new());
-            self.command_ring.push(enable_slot_cmd);
+            self.command_ring.lock().push(enable_slot_cmd);
             registers.doorbell.update_volatile_at(0, |doorbell| {
                 doorbell.set_doorbell_target(0);
                 doorbell.set_doorbell_stream_id(0);
@@ -343,7 +348,7 @@ where
         self.port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
 
         let mut address_device_command = trb::command::AddressDevice::new();
-        let input_context_pointer = &device.input_context as *const _ as u64;
+        let input_context_pointer = &*device.input_context as *const InputContextWrapper as u64;
         let slot_context_pointer = (input_context_pointer + 32) as *const Slot64Byte;
         let ep0_context_pointer = (input_context_pointer + 64) as *const Endpoint64Byte;
         log::debug!("slot context pointer?: {:p}", slot_context_pointer);
@@ -361,7 +366,7 @@ where
         address_device_command.set_slot_id(slot_id as u8);
         log::debug!("address device command: {:#x?}", address_device_command);
         let address_device_command = trb::command::Allowed::AddressDevice(address_device_command);
-        self.command_ring.push(address_device_command);
+        self.command_ring.lock().push(address_device_command);
         registers.doorbell.update_volatile_at(0, |doorbell| {
             doorbell.set_doorbell_target(0);
             doorbell.set_doorbell_stream_id(0);
@@ -424,6 +429,7 @@ where
     fn configure_device_context(
         registers: &Arc<Mutex<xhci::Registers<M>>>,
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+        command_ring: Arc<Mutex<CommandRing>>,
     ) -> DeviceManager<M, &'static GlobalAllocator> {
         let cloned_registers = Arc::clone(registers);
         let registers = &mut *registers.lock();
@@ -440,8 +446,12 @@ where
             config.set_max_device_slots_enabled(max_device_slots_enabled);
         });
         log::debug!("max_device_slots_enabled: {}", max_device_slots_enabled);
-        let mut device_manager =
-            DeviceManager::new(max_device_slots_enabled, cloned_registers, event_ring);
+        let mut device_manager = DeviceManager::new(
+            max_device_slots_enabled,
+            cloned_registers,
+            event_ring,
+            command_ring,
+        );
 
         // Allocate scratchpad_buffers on first pointer of DeviceContextArray
         let hcsparams2 = registers.capability.hcsparams2.read_volatile();

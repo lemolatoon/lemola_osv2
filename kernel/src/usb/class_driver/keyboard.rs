@@ -1,8 +1,11 @@
 use core::panic;
 
+extern crate alloc;
+use alloc::vec::Vec;
 use usb_host::{DeviceDescriptor, Driver, DriverError, TransferError, USBHost};
+use xhci::context::EndpointType;
 
-use crate::usb::descriptor::{DescriptorIter, DescriptorRef};
+use crate::usb::descriptor::{Descriptor, DescriptorIter, DescriptorRef};
 
 use super::{EndpointInfo, InputOnlyDevice, InputOnlyDriver};
 
@@ -48,6 +51,7 @@ fn ep_for_bootkbd(buf: &[u8]) -> Option<EndpointInfo<'_>> {
     let mut parser = DescriptorIter::new(buf);
     let mut interface_found = None;
     while let Some(desc) = parser.next() {
+        log::debug!("desc: {:?}", desc);
         if let DescriptorRef::Interface(idesc) = desc {
             if idesc.b_interface_class == 0x03
                 && idesc.b_interface_sub_class == 0x01
@@ -58,6 +62,11 @@ fn ep_for_bootkbd(buf: &[u8]) -> Option<EndpointInfo<'_>> {
                 interface_found = None;
             }
         } else if let DescriptorRef::Endpoint(edesc) = desc {
+            match (edesc.b_endpoint_address >> 7, edesc.bm_attributes & 3) {
+                // Interrupt IN endpoint
+                (1, 3) => {}
+                _ => continue,
+            }
             if let Some(interface_num) = interface_found {
                 return Some(EndpointInfo {
                     interface_num,

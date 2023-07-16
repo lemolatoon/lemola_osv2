@@ -300,6 +300,10 @@ impl<
                 } = (self.endpoint_searcher)(config_buf).expect("no boot keyboard found");
                 log::info!("Boot keyboard found on {:?}", endpoint);
 
+                log::debug!(
+                    "dci: {}",
+                    (endpoint.b_endpoint_address & 0x7f) * 2 + (endpoint.b_endpoint_address >> 7)
+                );
                 self.endpoints[0] = Some(Endpoint::new(
                     self.addr,
                     endpoint.b_endpoint_address & 0x7f,

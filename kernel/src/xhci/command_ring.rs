@@ -39,13 +39,14 @@ impl CommandRing {
         self.cycle_bit = !self.cycle_bit;
     }
 
-    pub fn push(&mut self, mut cmd: command::Allowed) {
+    pub fn push(&mut self, mut cmd: command::Allowed) -> *const TrbRaw {
         if self.cycle_bit {
             cmd.set_cycle_bit();
         } else {
             cmd.clear_cycle_bit();
         }
         self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
+        let trb_ptr = &self.trb_buffer[self.write_index] as *const TrbRaw;
         log::debug!(
             "command ring trb ptr: {:p}",
             &self.trb_buffer[self.write_index]
@@ -63,5 +64,6 @@ impl CommandRing {
             self.write_index = 0;
             self.toggle_cycle_bit();
         }
+        trb_ptr
     }
 }
