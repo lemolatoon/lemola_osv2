@@ -16,7 +16,7 @@ use crate::{
     memory::PAGE_SIZE,
     usb::{
         class_driver::ClassDriverManager,
-        device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
+        device::{DeviceContextIndex, InputContextWrapper},
     },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
@@ -161,7 +161,7 @@ where
         log::debug!("[XHCI] xhc controller starts running!!");
     }
 
-    pub fn process_event<MF, KF>(&mut self, class_drivers: &mut ClassDriverManager<M, MF, KF>)
+    pub fn process_event<MF, KF>(&mut self, class_drivers: &mut ClassDriverManager<MF, KF>)
     where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
@@ -205,7 +205,7 @@ where
     pub fn process_event_ring_event<MF, KF>(
         &mut self,
         event_trb: event::Allowed,
-        class_drivers: &mut ClassDriverManager<M, MF, KF>,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
     ) where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
@@ -326,24 +326,16 @@ where
             slot_id
         );
         let ep0_dci = DeviceContextIndex::ep0();
-        let mut device = self
-            .device_manager
-            .allocate_device(port_index, slot_id)
-            .lock();
+        let device = self.device_manager.allocate_device(port_index, slot_id);
         device.enable_slot_context();
         device.enable_endpoint(ep0_dci);
 
-        drop(device);
         let mut registers = self.registers.lock();
         let porttsc = registers
             .port_register_set
             .read_volatile_at(port_index)
             .portsc;
-        let mut device = self
-            .device_manager
-            .device_by_slot_id_mut(slot_id)
-            .unwrap()
-            .lock();
+        let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
         device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
 
         let transfer_ring_dequeue_pointer = device
@@ -361,13 +353,8 @@ where
 
         device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
 
-        drop(device);
         self.device_manager.load_device_context(slot_id);
-        let device = self
-            .device_manager
-            .device_by_slot_id_mut(slot_id)
-            .unwrap()
-            .lock();
+        let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
 
         let slot_context = device.slot_context();
         log::debug!("slot context: {:x?}", slot_context.as_ref());
@@ -408,7 +395,7 @@ where
         &mut self,
         port_idx: u8,
         slot_id: u8,
-        class_drivers: &mut ClassDriverManager<M, MF, KF>,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
     ) where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
@@ -425,12 +412,7 @@ where
         };
         self.port_configure_state
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
-        await_sync!(
-            DeviceContextInfo::<M, &'static GlobalAllocator>::start_initialization(
-                &mut device,
-                class_drivers
-            )
-        );
+        await_sync!(device.start_initialization(class_drivers));
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
@@ -575,11 +557,8 @@ where
         log::debug!("OS has owned xHC!!");
     }
 
-    pub fn usb_device_host_at(
-        &mut self,
-        slot_id: usize,
-    ) -> Option<Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
-        self.device_manager.device_host_by_slot_id(slot_id)
+    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Option<&mut dyn usb_host::USBHost> {
+        self.device_manager.device_host_by_slot_id_mut(slot_id)
     }
 }
 
@@ -610,7 +589,7 @@ where
     fn process_command_completion_event<MF, KF>(
         &mut self,
         event: trb::event::CommandCompletion,
-        class_drivers: &mut ClassDriverManager<M, MF, KF>,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
     ) where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
@@ -678,7 +657,7 @@ where
                     panic!("InvalidSlotId")
                 };
 
-                let port_index = device.lock().slot_context().root_hub_port_number() - 1;
+                let port_index = device.slot_context().root_hub_port_number() - 1;
 
                 if self.port_configure_state.addressing_port_index != Some(port_index as usize) {
                     log::error!(

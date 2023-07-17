@@ -2,7 +2,6 @@ extern crate alloc;
 use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use async_trait::async_trait;
 use kernel_lib::await_sync;
 use spin::Mutex;
 use usb_host::{
@@ -21,7 +20,6 @@ use xhci::{
 
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
-    memory::MemoryMapper,
     usb::{
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
@@ -31,7 +29,7 @@ use crate::{
     },
 };
 
-use super::{class_driver::ClassDriverManager, descriptor::Descriptor, traits::AsyncUSBHost};
+use super::{class_driver::ClassDriverManager, descriptor::Descriptor};
 
 #[derive(Debug, Clone)]
 #[repr(align(64))]
@@ -80,8 +78,6 @@ pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
     // pub event_waiting_issuer_map: BTreeMap<SetupPacketWrapper, Box<dyn ClassDriver>>,
     transfer_rings: [Option<Box<TransferRing<A>, A>>; 31],
 }
-
-static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: Send, Sync);
 
 impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn new(
@@ -214,25 +210,23 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     }
 
     pub async fn start_initialization<MF, KF>(
-        host: &mut Arc<Mutex<Self>>,
-        class_drivers: &mut ClassDriverManager<M, MF, KF>,
+        &mut self,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
     ) where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
     {
-        let mut host_guard = host.lock();
-        let device_descriptor = host_guard.request_device_descriptor().await;
-        let buffer_len = host_guard
+        let device_descriptor = self.request_device_descriptor().await;
+        let buffer_len = self
             .transfer_ring_at(DeviceContextIndex::ep0())
             .as_ref()
             .unwrap()
             .buffer_len();
         for _ in 0..buffer_len {
             // ensure transfer ring is correctly working.
-            let _ = host_guard.request_device_descriptor().await;
+            let _ = self.request_device_descriptor().await;
         }
-        let descriptors = host_guard.request_config_descriptor_and_rest().await;
-        drop(host_guard);
+        let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
         if device_descriptor.b_device_class == 0 {
             let mut boot_keyboard_interface = None;
@@ -267,22 +261,18 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let host_guard = host.lock();
-                let address = host_guard.device_address();
-                let host = Arc::clone(host);
+                let address = self.device_address();
                 class_drivers
-                    .add_keyboard_device(host, device_descriptor, address)
+                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
             } else {
                 log::warn!("no book keyboard interface found");
             }
 
             if let Some(_mouse_interface) = mouse_interface {
-                let host_guard = host.lock();
-                let address = host_guard.device_address();
-                let host = Arc::clone(host);
+                let address = self.device_address();
                 class_drivers
-                    .add_mouse_device(host, device_descriptor, address)
+                    .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
             } else {
                 log::warn!("no mouse interface found");
@@ -372,7 +362,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
 
     pub async fn async_control_transfer(
         &mut self,
-        ep: &mut (dyn usb_host::Endpoint + Send + Sync),
+        ep: &mut dyn usb_host::Endpoint,
         bm_request_type: usb_host::RequestType,
         b_request: usb_host::RequestCode,
         w_value: usb_host::WValue,
@@ -420,7 +410,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
 
     async fn async_in_transfer(
         &mut self,
-        ep: &mut (dyn usb_host::Endpoint + Send + Sync),
+        ep: &mut dyn usb_host::Endpoint,
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
         use xhci::context::InputHandler;
@@ -459,47 +449,43 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         if self.transfer_ring_at(dci).is_none() {
             // Configure endpoint
             self.input_context = InputContextWrapper::new();
-            {
-                let input_control_context = self.input_context.0.control_mut();
-                input_control_context.set_add_context_flag(0);
-                match ep.transfer_type() {
-                    usb_host::TransferType::Interrupt => {
-                        let transfer_ring = TransferRing::alloc_new(32);
-                        // transfer_ring.fill_with_normal();
-                        input_control_context.set_add_context_flag(dci.address() as usize);
-                        let device_context = self.input_context.0.device_mut();
-                        // Setup endpoint context
-                        let endpoint_context = device_context.endpoint_mut(dci.address() as usize);
-                        endpoint_context.set_endpoint_type(EndpointType::InterruptIn);
-                        endpoint_context.set_tr_dequeue_pointer(transfer_ring.buffer_ptr()
-                            as *const TrbRaw
-                            as u64);
-                        endpoint_context.set_dequeue_cycle_state();
-                        endpoint_context.set_error_count(3);
-                        endpoint_context.set_max_packet_size(ep.max_packet_size());
-                        endpoint_context.set_average_trb_length(8); // TODO: set this correctly
-                        endpoint_context.set_max_burst_size(0);
-                        endpoint_context.set_max_primary_streams(0);
-                        endpoint_context.set_max_endpoint_service_time_interval_payload_low(
-                            ep.max_packet_size(),
-                        );
-                        endpoint_context.set_mult(0);
-                        let interval = match portsc.port_speed() {
+            let input_control_context = self.input_context.0.control_mut();
+            input_control_context.set_add_context_flag(0);
+            match ep.transfer_type() {
+                usb_host::TransferType::Interrupt => {
+                    let transfer_ring = TransferRing::alloc_new(32);
+                    // transfer_ring.fill_with_normal();
+                    input_control_context.set_add_context_flag(dci.address() as usize);
+                    let device_context = self.input_context.0.device_mut();
+                    // Setup endpoint context
+                    let endpoint_context = device_context.endpoint_mut(dci.address() as usize);
+                    endpoint_context.set_endpoint_type(EndpointType::InterruptIn);
+                    endpoint_context
+                        .set_tr_dequeue_pointer(transfer_ring.buffer_ptr() as *const TrbRaw as u64);
+                    endpoint_context.set_dequeue_cycle_state();
+                    endpoint_context.set_error_count(3);
+                    endpoint_context.set_max_packet_size(ep.max_packet_size());
+                    endpoint_context.set_average_trb_length(8); // TODO: set this correctly
+                    endpoint_context.set_max_burst_size(0);
+                    endpoint_context.set_max_primary_streams(0);
+                    endpoint_context
+                        .set_max_endpoint_service_time_interval_payload_low(ep.max_packet_size());
+                    endpoint_context.set_mult(0);
+                    let interval = match portsc.port_speed() {
                         1 /* FullSpeed */ | 2 /* LowSpeed */ => endpoint_descriptor.b_interval.ilog2() as u8 + 3,
                         3 /* HighSpeed */ | 4 /* SuperSpeed */ => endpoint_descriptor.b_interval - 1,
                         _ => return Err(usb_host::TransferError::Permanent("Unknown speed")),
                     };
-                        endpoint_context.set_interval(interval);
-                        // End Setup endpoint context
-                        *self.transfer_ring_at_mut(dci) = Some(transfer_ring);
-                    }
-                    usb_host::TransferType::Control => todo!(),
-                    usb_host::TransferType::Isochronous => todo!(),
-                    usb_host::TransferType::Bulk => todo!(),
+                    endpoint_context.set_interval(interval);
+                    // End Setup endpoint context
+                    *self.transfer_ring_at_mut(dci) = Some(transfer_ring);
                 }
-                let device_context = self.input_context.0.device_mut();
-                device_context.slot_mut().set_context_entries(dci.address());
+                usb_host::TransferType::Control => todo!(),
+                usb_host::TransferType::Isochronous => todo!(),
+                usb_host::TransferType::Bulk => todo!(),
             }
+            let device_context = self.input_context.0.device_mut();
+            device_context.slot_mut().set_context_entries(dci.address());
             let trb = {
                 let mut trb = command::ConfigureEndpoint::new();
                 trb.set_input_context_pointer(
@@ -509,7 +495,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 let trb_ptr = {
                     let mut command_ring = self.command_ring.lock();
                     command_ring.push(command::Allowed::ConfigureEndpoint(trb))
-                } as u64;
+                };
                 let event_ring = Arc::clone(&self.event_ring);
                 let mut registers = self.registers.lock();
                 registers.doorbell.update_volatile_at(0, |doorbell| {
@@ -517,7 +503,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                     doorbell.set_doorbell_stream_id(0);
                 });
                 let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-                EventRing::get_received_command_trb(event_ring, &mut interrupter, trb_ptr).await
+                EventRing::get_received_command_trb(event_ring, &mut interrupter, trb_ptr as u64)
+                    .await
             };
             match trb.completion_code() {
                 Ok(event::CompletionCode::Success) => {
@@ -805,8 +792,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
         await_sync!(self.async_control_transfer(
-            // Safety: this is safe because we know that this future will be executed synchronously
-            unsafe { core::mem::transmute(ep) },
+            ep,
             bm_request_type,
             b_request,
             w_value,
@@ -820,48 +806,12 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         ep: &mut dyn usb_host::Endpoint,
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
-        // Safety: this is safe because we know that this future will be executed synchronously
-        await_sync!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
+        await_sync!(self.async_in_transfer(ep, buf))
     }
 
     fn out_transfer(
         &mut self,
         _ep: &mut dyn usb_host::Endpoint,
-        _buf: &[u8],
-    ) -> Result<usize, usb_host::TransferError> {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl<M: Mapper + Clone + Sync + Send> AsyncUSBHost
-    for Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>
-{
-    async fn control_transfer(
-        &mut self,
-        ep: &mut (dyn usb_host::Endpoint + Send + Sync),
-        bm_request_type: usb_host::RequestType,
-        b_request: usb_host::RequestCode,
-        w_value: usb_host::WValue,
-        w_index: u16,
-        buf: Option<&mut [u8]>,
-    ) -> Result<usize, usb_host::TransferError> {
-        self.lock()
-            .async_control_transfer(ep, bm_request_type, b_request, w_value, w_index, buf)
-            .await
-    }
-
-    async fn in_transfer(
-        &mut self,
-        ep: &mut (dyn usb_host::Endpoint + Send + Sync),
-        buf: &mut [u8],
-    ) -> Result<usize, usb_host::TransferError> {
-        self.lock().async_in_transfer(ep, buf).await
-    }
-
-    async fn out_transfer(
-        &mut self,
-        ep: &mut (dyn usb_host::Endpoint + Send + Sync),
         _buf: &[u8],
     ) -> Result<usize, usb_host::TransferError> {
         todo!()

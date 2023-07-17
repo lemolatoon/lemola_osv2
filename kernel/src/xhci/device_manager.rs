@@ -56,7 +56,7 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         &mut self,
         port_index: usize,
         slot_id: usize,
-    ) -> &mut Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>> {
+    ) -> &mut DeviceContextInfo<M, &'static GlobalAllocator> {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
                 "slot_id is out of range: {} / {}",
@@ -74,9 +74,13 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
         let command_ring = Arc::clone(&self.command_ring);
-        self.device_context_array.device_context_infos[slot_id] = Some(Arc::new(Mutex::new(
-            DeviceContextInfo::new(port_index, slot_id, registers, event_ring, command_ring),
-        )));
+        self.device_context_array.device_context_infos[slot_id] = Some(DeviceContextInfo::new(
+            port_index,
+            slot_id,
+            registers,
+            event_ring,
+            command_ring,
+        ));
         self.device_context_array.device_context_infos[slot_id]
             .as_mut()
             .unwrap()
@@ -85,23 +89,24 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
     pub fn device_by_slot_id(
         &self,
         slot_id: usize,
-    ) -> Option<&Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
+    ) -> Option<&DeviceContextInfo<M, &'static GlobalAllocator>> {
         self.device_context_array.device_context_infos[slot_id].as_ref()
     }
 
     pub fn device_by_slot_id_mut(
         &mut self,
         slot_id: usize,
-    ) -> Option<&mut Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
+    ) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
         self.device_context_array.device_context_infos[slot_id].as_mut()
     }
 
-    pub fn device_host_by_slot_id(
+    pub fn device_host_by_slot_id_mut(
         &mut self,
         slot_id: usize,
-    ) -> Option<Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
-        if let Some(host) = self.device_context_array.device_context_infos[slot_id].as_ref() {
-            return Some(Arc::clone(host));
+    ) -> Option<&mut dyn usb_host::USBHost> {
+        if let Some(host) = self.device_context_array.device_context_infos[slot_id].as_mut() {
+            let host: &mut dyn usb_host::USBHost = host;
+            return Some(host);
         }
         None
     }
@@ -114,16 +119,16 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
         let device_context_info = self.device_context_array.device_context_infos[slot_id]
             .as_mut()
             .unwrap();
-        self.device_context_array.device_contexts[slot_id] =
-            &*device_context_info.lock().device_context as *const DeviceContextWrapper
-                as *mut Device32Byte;
+        self.device_context_array.device_contexts[slot_id] = &*device_context_info.device_context
+            as *const DeviceContextWrapper
+            as *mut Device32Byte;
     }
 }
 
 #[derive(Debug)]
 struct DeviceContextArray<M: Mapper + Clone, A: Allocator> {
     device_contexts: Box<[*mut Device32Byte], A>,
-    device_context_infos: Vec<Option<Arc<Mutex<DeviceContextInfo<M, A>>>>>,
+    device_context_infos: Vec<Option<DeviceContextInfo<M, A>>>,
 }
 
 impl<M: Mapper + Clone> DeviceContextArray<M, &'static GlobalAllocator> {
