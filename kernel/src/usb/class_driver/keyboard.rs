@@ -27,7 +27,7 @@ pub type BootKeyboardDriver<F> = InputOnlyDriver<
     CONFIG_BUFFER_LEN,
     N_IN_TRANSFER_BYTES,
     MAX_DEVICES,
-    "BootKeyboardDriver",
+    0,
 >;
 
 impl<F> BootKeyboardDriver<F>

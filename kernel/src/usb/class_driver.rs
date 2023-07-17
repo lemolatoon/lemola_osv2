@@ -4,15 +4,24 @@ pub mod mouse;
 
 use core::mem::MaybeUninit;
 
+extern crate alloc;
+use alloc::sync::Arc;
+use spin::Mutex;
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Direction, Driver, DriverError,
     EndpointDescriptor, RequestCode, RequestDirection, RequestKind, RequestRecipient, RequestType,
     TransferError, TransferType, WValue,
 };
 use usb_host::{Endpoint as EndpointTrait, USBHost};
+use xhci::accessor::Mapper;
+
+use crate::alloc::alloc::GlobalAllocator;
 
 use self::keyboard::BootKeyboardDriver;
 use self::mouse::MouseDriver;
+
+use super::device::DeviceContextInfo;
+use super::traits::{AsyncDriver, AsyncUSBHost};
 
 type EndpointSearcher = fn(&[u8]) -> Option<EndpointInfo<'_>>;
 pub struct InputOnlyDriver<
@@ -22,7 +31,7 @@ pub struct InputOnlyDriver<
     const CONFIG_BUFFER_LEN: usize,
     const N_IN_TRANSFER_BYTES: usize,
     const MAX_DEVICES: usize,
-    const NAME: &'static str,
+    const NAME: usize,
 > {
     devices: [Option<
         InputOnlyDevice<MAX_ENDPOINTS, SETTLE_DELAY, CONFIG_BUFFER_LEN, N_IN_TRANSFER_BYTES>,
@@ -37,7 +46,7 @@ impl<
         const CONFIG_BUFFER_LEN: usize,
         const N_IN_TRANSFER_BYTES: usize,
         const MAX_DEVICES: usize,
-        const NAME: &'static str,
+        const NAME: usize,
     > core::fmt::Debug
     for InputOnlyDriver<
         F,
@@ -50,7 +59,12 @@ impl<
     >
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct(NAME).finish()
+        let name = match NAME {
+            0 => "BootKeyboardDriver",
+            1 => "MouseDriver",
+            _ => "Unknown",
+        };
+        f.debug_struct(name).finish()
     }
 }
 
@@ -61,7 +75,7 @@ impl<
         const CONFIG_BUFFER_LEN: usize,
         const N_IN_TRANSFER_BYTES: usize,
         const MAX_DEVICES: usize,
-        const NAME: &'static str,
+        const NAME: usize,
     >
     InputOnlyDriver<
         F,
@@ -100,7 +114,7 @@ impl<
         const CONFIG_BUFFER_LEN: usize,
         const N_IN_TRANSFER_BYTES: usize,
         const MAX_DEVICES: usize,
-        const NAME: &'static str,
+        const NAME: usize,
     > Driver
     for InputOnlyDriver<
         F,
@@ -144,6 +158,55 @@ where
     fn tick(&mut self, millis: usize, host: &mut dyn USBHost) -> Result<(), DriverError> {
         for dev in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
             if let Err(TransferError::Permanent(e)) = dev.fsm(millis, host, &mut self.callback) {
+                return Err(DriverError::Permanent(dev.addr, e));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<
+        F,
+        const MAX_ENDPOINTS: usize,
+        const SETTLE_DELAY: usize,
+        const CONFIG_BUFFER_LEN: usize,
+        const N_IN_TRANSFER_BYTES: usize,
+        const MAX_DEVICES: usize,
+        const NAME: usize,
+    > AsyncDriver
+    for InputOnlyDriver<
+        F,
+        MAX_ENDPOINTS,
+        SETTLE_DELAY,
+        CONFIG_BUFFER_LEN,
+        N_IN_TRANSFER_BYTES,
+        MAX_DEVICES,
+        NAME,
+    >
+where
+    F: FnMut(u8, &[u8]),
+{
+    fn want_device(&self, device: &DeviceDescriptor) -> bool {
+        Driver::want_device(self, device)
+    }
+
+    fn add_device(&mut self, device: DeviceDescriptor, address: u8) -> Result<(), DriverError> {
+        Driver::add_device(self, device, address)
+    }
+
+    fn remove_device(&mut self, address: u8) {
+        Driver::remove_device(self, address)
+    }
+
+    async fn tick(
+        &mut self,
+        millis: usize,
+        host: &mut (dyn AsyncUSBHost + Send + Sync),
+    ) -> Result<(), DriverError> {
+        for dev in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
+            if let Err(TransferError::Permanent(e)) =
+                dev.async_fsm(millis, host, &mut self.callback).await
+            {
                 return Err(DriverError::Permanent(dev.addr, e));
             }
         }
@@ -399,6 +462,208 @@ impl<
 
         Ok(())
     }
+
+    async fn async_fsm(
+        &mut self,
+        millis: usize,
+        host: &mut dyn AsyncUSBHost,
+        callback: &mut dyn FnMut(u8, &[u8]),
+    ) -> Result<(), TransferError> {
+        // TODO: either we need another `control_transfer` that
+        // doesn't take data, or this `none` value needs to be put in
+        // the usb-host layer. None of these options are good.
+        let none: Option<&mut [u8]> = None;
+        unsafe {
+            static mut LAST_STATE: DeviceState = DeviceState::Addressed;
+            if LAST_STATE != self.state {
+                log::info!("{:?} -> {:?}", LAST_STATE, self.state);
+                LAST_STATE = self.state;
+            }
+        }
+
+        match self.state {
+            DeviceState::Addressed => {
+                self.state = DeviceState::WaitForSettle(millis + SETTLE_DELAY)
+            }
+
+            DeviceState::WaitForSettle(until) => {
+                // TODO: This seems unnecessary. We're not using the
+                // device descriptor at all.
+                if millis > until {
+                    let mut dev_desc: MaybeUninit<DeviceDescriptor> = MaybeUninit::uninit();
+                    let buf = unsafe { to_slice_mut(&mut dev_desc) };
+                    let len = host
+                        .control_transfer(
+                            &mut self.ep0,
+                            RequestType::from((
+                                RequestDirection::DeviceToHost,
+                                RequestKind::Standard,
+                                RequestRecipient::Device,
+                            )),
+                            RequestCode::GetDescriptor,
+                            WValue::from((0, DescriptorType::Device as u8)),
+                            0,
+                            Some(buf),
+                        )
+                        .await?;
+                    assert!(len == core::mem::size_of::<DeviceDescriptor>());
+                    self.state = DeviceState::GetConfig
+                }
+            }
+
+            DeviceState::GetConfig => {
+                let mut conf_desc: MaybeUninit<ConfigurationDescriptor> = MaybeUninit::uninit();
+                let desc_buf = unsafe { to_slice_mut(&mut conf_desc) };
+                let len = host
+                    .control_transfer(
+                        &mut self.ep0,
+                        RequestType::from((
+                            RequestDirection::DeviceToHost,
+                            RequestKind::Standard,
+                            RequestRecipient::Device,
+                        )),
+                        RequestCode::GetDescriptor,
+                        WValue::from((0, DescriptorType::Configuration as u8)),
+                        0,
+                        Some(desc_buf),
+                    )
+                    .await?;
+                assert!(len == core::mem::size_of::<ConfigurationDescriptor>());
+                let conf_desc = unsafe { conf_desc.assume_init() };
+
+                if (conf_desc.w_total_length as usize) > CONFIG_BUFFER_LEN {
+                    log::trace!("config descriptor: {:?}", conf_desc);
+                    return Err(TransferError::Permanent("config descriptor too large"));
+                }
+
+                // TODO: do a real allocation later. For now, keep a
+                // large-ish static buffer and take an appropriately
+                // sized slice into it for the transfer.
+                #[allow(clippy::uninit_assumed_init)]
+                let mut config =
+                    unsafe { MaybeUninit::<[u8; CONFIG_BUFFER_LEN]>::uninit().assume_init() };
+                if CONFIG_BUFFER_LEN < conf_desc.w_total_length as usize {
+                    log::trace!("config descriptor: {:?}", conf_desc);
+                    return Err(TransferError::Permanent("config descriptor too large"));
+                }
+                let config_buf = &mut config[..conf_desc.w_total_length as usize];
+                let len = host
+                    .control_transfer(
+                        &mut self.ep0,
+                        RequestType::from((
+                            RequestDirection::DeviceToHost,
+                            RequestKind::Standard,
+                            RequestRecipient::Device,
+                        )),
+                        RequestCode::GetDescriptor,
+                        WValue::from((0, DescriptorType::Configuration as u8)),
+                        0,
+                        Some(config_buf),
+                    )
+                    .await?;
+                assert!(len == conf_desc.w_total_length as usize);
+                let EndpointInfo {
+                    interface_num,
+                    endpoint,
+                } = (self.endpoint_searcher)(config_buf).expect("no boot keyboard found");
+                log::info!("Boot keyboard found on {:?}", endpoint);
+
+                log::debug!(
+                    "dci: {}",
+                    (endpoint.b_endpoint_address & 0x7f) * 2 + (endpoint.b_endpoint_address >> 7)
+                );
+                self.endpoints[0] = Some(Endpoint::new(
+                    self.addr,
+                    endpoint.b_endpoint_address & 0x7f,
+                    interface_num,
+                    TransferType::Interrupt,
+                    Direction::In,
+                    endpoint.w_max_packet_size,
+                ));
+
+                // TODO: browse configs and pick the "best" one. But
+                // this should always be ok, at least.
+                self.state = DeviceState::SetConfig(1)
+            }
+
+            DeviceState::SetConfig(config_index) => {
+                host.control_transfer(
+                    &mut self.ep0,
+                    RequestType::from((
+                        RequestDirection::HostToDevice,
+                        RequestKind::Standard,
+                        RequestRecipient::Device,
+                    )),
+                    RequestCode::SetConfiguration,
+                    WValue::from((config_index, 0)),
+                    0,
+                    none,
+                )
+                .await?;
+
+                self.state = DeviceState::SetProtocol;
+            }
+
+            DeviceState::SetProtocol => {
+                if let Some(ref ep) = self.endpoints[0] {
+                    host.control_transfer(
+                        &mut self.ep0,
+                        RequestType::from((
+                            RequestDirection::HostToDevice,
+                            RequestKind::Class,
+                            RequestRecipient::Interface,
+                        )),
+                        RequestCode::SetInterface,
+                        WValue::from((0, 0)),
+                        u16::from(ep.interface_num),
+                        None,
+                    )
+                    .await?;
+
+                    self.state = DeviceState::SetIdle;
+                } else {
+                    return Err(TransferError::Permanent("no boot keyboard"));
+                }
+            }
+
+            DeviceState::SetIdle => {
+                host.control_transfer(
+                    &mut self.ep0,
+                    RequestType::from((
+                        RequestDirection::HostToDevice,
+                        RequestKind::Class,
+                        RequestRecipient::Interface,
+                    )),
+                    RequestCode::GetInterface,
+                    WValue::from((0, 0)),
+                    0,
+                    none,
+                )
+                .await?;
+                self.state = DeviceState::Running;
+            }
+
+            DeviceState::Running => {
+                if let Some(ref mut ep) = self.endpoints[0] {
+                    let mut b: [u8; N_IN_TRANSFER_BYTES] = [0; N_IN_TRANSFER_BYTES];
+                    match host.in_transfer(ep, &mut b).await {
+                        Err(TransferError::Permanent(msg)) => {
+                            log::error!("reading report: {}", msg);
+                            return Err(TransferError::Permanent(msg));
+                        }
+                        Err(TransferError::Retry(_)) => return Ok(()),
+                        Ok(_) => {
+                            callback(self.addr, &b);
+                        }
+                    }
+                } else {
+                    return Err(TransferError::Permanent("no boot keyboard"));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 unsafe fn to_slice_mut<T>(v: &mut T) -> &mut [u8] {
@@ -482,13 +747,13 @@ macro_rules! add_device {
     ($func_name:ident, $device:ident, $err:expr) => {
         pub fn $func_name(
             &mut self,
-            slot_id: usize,
+            host: Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>,
             device_descriptor: DeviceDescriptor,
             addr: u8,
         ) -> Result<(), DriverError> {
-            if self.$device.1.want_device(&device_descriptor) {
-                self.$device.0 = Some(slot_id);
-                return self.$device.1.add_device(device_descriptor, addr);
+            if Driver::want_device(&self.$device.1, &device_descriptor) {
+                self.$device.0 = Some(host);
+                return Driver::add_device(&mut self.$device.1, device_descriptor, addr);
             }
 
             Err(DriverError::Permanent(addr, $err))
@@ -514,17 +779,25 @@ macro_rules! tick {
     };
 }
 
-pub struct ClassDriverManager<MF, KF>
+pub struct ClassDriverManager<M, MF, KF>
 where
+    M: Mapper + Clone,
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
-    mouse: (Option<usize>, MouseDriver<MF>),
-    keyboard: (Option<usize>, BootKeyboardDriver<KF>),
+    mouse: (
+        Option<Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>>,
+        MouseDriver<MF>,
+    ),
+    keyboard: (
+        Option<Arc<Mutex<DeviceContextInfo<M, &'static GlobalAllocator>>>>,
+        BootKeyboardDriver<KF>,
+    ),
 }
 
-impl<MF, KF> ClassDriverManager<MF, KF>
+impl<M, MF, KF> ClassDriverManager<M, MF, KF>
 where
+    M: Mapper + Clone,
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
@@ -538,31 +811,44 @@ where
         }
     }
 
-    pub fn tick<'a>(
-        &mut self,
-        millis: usize,
-        mut get_host: impl FnMut(usize) -> Option<&'a mut dyn usb_host::USBHost>, // slot_id to host
-    ) -> Result<(), DriverError> {
-        macro_rules! tick_device {
-            ($device:ident) => {
-                if let Some(slot_id) = self.$device.0 {
-                    if let Some(host) = get_host(slot_id) {
-                        self.$device.1.tick(millis, host)?;
-                    }
-                }
-            };
+    pub async fn tick<'a>(&mut self, millis: usize) -> Result<(), DriverError> {
+        extern crate alloc;
+        // macro_rules! tick_device {
+        //     ($device:ident) => {{
+        //         if let Some(host) = self.$device.0 {
+        //             let mut host = host.lock();
+        //             Some(alloc::boxed::Box::pin(AsyncDriver::tick(
+        //                 &mut self.$device.1,
+        //                 millis,
+        //                 &mut host,
+        //             )))
+        //         } else {
+        //             None
+        //         }
+        //     }};
+        // }
+        let fut = if let Some(ref host) = self.mouse.0 {
+            let host = Arc::clone(host);
+            Some(alloc::boxed::Box::pin(AsyncDriver::tick(
+                &mut self.mouse.1,
+                millis,
+                &mut host,
+            )))
+        } else {
+            None
+        };
+        let futures = alloc::vec![tick_device!(mouse), tick_device!(keyboard)];
+        if futures.is_empty() {
+            return Ok(());
         }
-        tick_device!(mouse);
-        tick_device!(keyboard);
+        futures_util::stream::select_all(
+            futures
+                .into_iter()
+                .filter_map(|f| f)
+                .collect::<alloc::vec::Vec<_>>(),
+        )
+        .await;
         Ok(())
-    }
-
-    pub fn mouse(&mut self) -> &mut (Option<usize>, MouseDriver<MF>) {
-        &mut self.mouse
-    }
-
-    pub fn keyboard(&mut self) -> &mut (Option<usize>, BootKeyboardDriver<KF>) {
-        &mut self.keyboard
     }
 
     add_device!(add_mouse_device, mouse, "Mouse device not wanted");

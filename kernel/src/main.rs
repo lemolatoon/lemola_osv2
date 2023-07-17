@@ -104,7 +104,6 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     loop {
         count += 1;
         controller.process_event(&mut class_drivers);
-        tick!(class_drivers, controller, count);
     }
 }
 

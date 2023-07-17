@@ -7,6 +7,7 @@
 #![allow(incomplete_features)]
 #![feature(adt_const_params)]
 #![feature(allocator_api)]
+#![feature(async_fn_in_trait)]
 pub mod alloc;
 pub mod font;
 pub mod graphics;
