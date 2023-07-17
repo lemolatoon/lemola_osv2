@@ -25,7 +25,7 @@ pub type MouseDriver<F> = InputOnlyDriver<
     CONFIG_BUFFER_LEN,
     N_IN_TRANSFER_BYTES,
     MAX_DEVICES,
-    "MouseDriver",
+    1,
 >;
 
 impl<F> MouseDriver<F>
