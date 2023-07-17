@@ -17,6 +17,7 @@ once_cell = { version = "1.17.1", default-features = false }
 spin = "0.9.8"
 static_assertions = "1.1.0"
 usb-host = "0.1.3"
+x86_64 = "0.14.10"
 xhci = "0.9.1"
 
 [features]

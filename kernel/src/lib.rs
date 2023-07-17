@@ -11,6 +11,7 @@
 pub mod alloc;
 pub mod font;
 pub mod graphics;
+pub mod interrupts;
 pub mod memory;
 pub mod pci;
 pub mod serial;
