@@ -263,11 +263,11 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let _address = self.device_address();
+                let address = self.device_address();
                 log::warn!("boot keyboard interface ignored");
-                // class_drivers
-                //     .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                //     .unwrap();
+                class_drivers
+                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                    .unwrap();
             } else {
                 log::warn!("no book keyboard interface found");
             }

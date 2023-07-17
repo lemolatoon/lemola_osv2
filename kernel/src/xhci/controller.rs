@@ -212,7 +212,7 @@ where
     {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
-                self.process_transfer_event(transfer_event);
+                self.process_transfer_event(transfer_event, class_drivers);
             }
             event::Allowed::CommandCompletion(command_completion) => {
                 self.process_command_completion_event(command_completion, class_drivers)
@@ -710,7 +710,14 @@ where
         }
     }
 
-    fn process_transfer_event(&mut self, event: trb::event::TransferEvent) {
+    fn process_transfer_event<MF, KF>(
+        &mut self,
+        event: trb::event::TransferEvent,
+        class_drivers: &mut ClassDriverManager<MF, KF>,
+    ) where
+        MF: Fn(u8, &[u8]),
+        KF: Fn(u8, &[u8]),
+    {
         log::debug!("TransferEvent received: {:?}", &event);
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
@@ -733,11 +740,13 @@ where
             }
         };
         let slot_id = event.slot_id();
-        let _device = self
+        let device = self
             .device_manager
             .device_by_slot_id_mut(slot_id as usize)
             .unwrap();
-        let mut event_ring = self.event_ring.lock();
-        event_ring.push(event::Allowed::TransferEvent(event));
+        // TODO: use appropriate millis
+        class_drivers
+            .tick_at(slot_id as usize, 100, device)
+            .unwrap();
     }
 }

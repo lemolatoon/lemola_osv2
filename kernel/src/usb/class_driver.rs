@@ -815,6 +815,33 @@ where
         Ok(())
     }
 
+    pub fn driver_at(&mut self, slot_id: usize) -> Option<&mut dyn Driver> {
+        if let Some(slot) = self.mouse.0 {
+            if slot == slot_id {
+                return Some(&mut self.mouse.1);
+            }
+        }
+        if let Some(slot) = self.keyboard.0 {
+            if slot == slot_id {
+                return Some(&mut self.keyboard.1);
+            }
+        }
+        None
+    }
+
+    pub fn tick_at(
+        &mut self,
+        slot_id: usize,
+        millis: usize,
+        host: &mut dyn usb_host::USBHost,
+    ) -> Result<(), DriverError> {
+        if let Some(driver) = self.driver_at(slot_id) {
+            driver.tick(millis, host)?;
+        }
+
+        Ok(())
+    }
+
     pub fn mouse(&mut self) -> &mut (Option<usize>, MouseDriver<MF>) {
         &mut self.mouse
     }
