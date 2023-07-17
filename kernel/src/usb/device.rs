@@ -3,7 +3,7 @@ use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
-use kernel_lib::await_sync;
+use kernel_lib::{await_once_noblocking, await_sync};
 use spin::Mutex;
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, SetupPacket,
@@ -797,7 +797,8 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         w_index: u16,
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
-        await_sync!(self.async_control_transfer(
+        // Returned None means the transfer is Pending yet
+        await_once_noblocking!(self.async_control_transfer(
             unsafe { core::mem::transmute(ep) },
             bm_request_type,
             b_request,
@@ -805,6 +806,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
             w_index,
             buf
         ))
+        .unwrap_or(Ok(0))
     }
 
     fn in_transfer(
@@ -812,7 +814,8 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         ep: &mut dyn usb_host::Endpoint,
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
-        await_sync!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
+        await_once_noblocking!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
+            .unwrap_or(Ok(0))
     }
 
     fn out_transfer(

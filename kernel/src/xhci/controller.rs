@@ -734,6 +734,7 @@ where
             .device_manager
             .device_by_slot_id_mut(slot_id as usize)
             .unwrap();
-        unreachable!()
+        log::warn!("unreachable");
+        return;
     }
 }
