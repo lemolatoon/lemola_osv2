@@ -690,7 +690,10 @@ where
 
                 self.initialize_device_at(port_index, slot_id, class_drivers);
             }
-            trb::command::Allowed::ConfigureEndpoint(_) => todo!(),
+            trb::command::Allowed::ConfigureEndpoint(_) => {
+                let mut event_ring = self.event_ring.lock();
+                event_ring.push(event::Allowed::CommandCompletion(event));
+            }
             trb::command::Allowed::EvaluateContext(_) => todo!(),
             trb::command::Allowed::ResetEndpoint(_) => todo!(),
             trb::command::Allowed::StopEndpoint(_) => todo!(),
@@ -734,7 +737,8 @@ where
             .device_manager
             .device_by_slot_id_mut(slot_id as usize)
             .unwrap();
-        log::warn!("unreachable");
+        let mut event_ring = self.event_ring.lock();
+        event_ring.push(event::Allowed::TransferEvent(event));
         return;
     }
 }

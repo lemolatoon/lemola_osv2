@@ -264,9 +264,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
                 let address = self.device_address();
-                class_drivers
-                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                    .unwrap();
+                // class_drivers
+                //     .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                //     .unwrap();
             } else {
                 log::warn!("no book keyboard interface found");
             }
@@ -440,7 +440,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 "Endpoint Descriptor Not Found",
             ))?;
         let dci = DeviceContextIndex::from(&endpoint_descriptor);
-        log::debug!("dci: {:?}", dci);
         let portsc = {
             let registers = self.registers.lock();
             registers
@@ -806,7 +805,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
             w_index,
             buf
         ))
-        .unwrap_or(Ok(0))
+        .unwrap_or(Err(usb_host::TransferError::Retry("transfer is pending")))
     }
 
     fn in_transfer(
@@ -814,8 +813,9 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         ep: &mut dyn usb_host::Endpoint,
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
-        await_once_noblocking!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
-            .unwrap_or(Ok(0))
+        // await_once_noblocking!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
+        //     .unwrap_or(Err(usb_host::TransferError::Retry("transfer is pending")))
+        await_sync!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
     }
 
     fn out_transfer(

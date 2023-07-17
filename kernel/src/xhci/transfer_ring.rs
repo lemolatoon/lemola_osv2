@@ -8,8 +8,9 @@ use crate::alloc::alloc::{
     alloc_array_with_boundary_with_default_else, alloc_with_boundary_with_default_else,
     GlobalAllocator,
 };
+use crate::graphics::InstantWriter;
 use crate::memory::PAGE_SIZE;
-use crate::{serial_print, serial_println};
+use crate::{print, serial_print, serial_println};
 
 use super::trb::TrbRaw;
 
@@ -84,27 +85,26 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn dump_state(&self) {
-        serial_print!("DEBUG: cycle bits: ");
+        use core::fmt::Write;
+        let mut writer = InstantWriter::new(|s| {
+            serial_print!("{}", s);
+            print!("{}", s);
+        });
+        writeln!(writer, "DEBUG: cycle bits: ").unwrap();
         self.trb_buffer
             .iter()
             .map(|trb| trb.cycle_bit())
             .for_each(|bit| {
                 if bit {
-                    serial_print!("1");
+                    write!(writer, "1").unwrap();
                 } else {
-                    serial_print!("0");
+                    write!(writer, "0").unwrap();
                 }
             });
-        serial_println!();
+        writeln!(writer).unwrap();
     }
 
     pub fn push(&mut self, mut cmd: transfer::Allowed) -> *mut TrbRaw {
-        log::debug!("write cycle_bit: {}", self.cycle_bit);
-        log::debug!(
-            "trb_buffer: [{:p} - {:p}]",
-            self.trb_buffer.as_ptr(),
-            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
-        );
         if self.cycle_bit {
             cmd.set_cycle_bit();
         } else {
@@ -113,7 +113,12 @@ impl TransferRing<&'static GlobalAllocator> {
         self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
 
         let trb_ptr = &mut self.trb_buffer[self.write_index] as *mut TrbRaw;
-        log::debug!("writing trb_ptr: {:p}", trb_ptr);
+        log::debug!(
+            "writing trb_ptr: {:p} in [{:p} - {:p}]",
+            trb_ptr,
+            self.trb_buffer.as_ptr(),
+            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
+        );
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
             log::debug!("end of the ring");

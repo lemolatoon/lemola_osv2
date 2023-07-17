@@ -231,7 +231,7 @@ impl SerialAndVgaCharWriter {
     }
 }
 static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter::new();
-struct InstantWriter<F: Fn(&str)> {
+pub struct InstantWriter<F: Fn(&str)> {
     f: F,
 }
 impl<F: Fn(&str)> InstantWriter<F> {
@@ -266,7 +266,11 @@ impl log::Log for SerialAndVgaCharWriter {
                 )
                 .unwrap();
             } else {
-                let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
+                // let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
+                let mut serial_writer = InstantWriter::new(|s| {
+                    serial_print!("{}", s);
+                    crate::print!("{}", s)
+                });
                 DecoratedLog::write(
                     &mut serial_writer,
                     record.level(),
