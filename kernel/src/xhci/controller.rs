@@ -739,6 +739,5 @@ where
             .unwrap();
         let mut event_ring = self.event_ring.lock();
         event_ring.push(event::Allowed::TransferEvent(event));
-        return;
     }
 }
