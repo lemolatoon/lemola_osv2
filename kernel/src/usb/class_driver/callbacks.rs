@@ -5,9 +5,20 @@ use kernel_lib::{
 
 use crate::graphics::get_pixcel_writer;
 
-static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(200, 100);
+static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(700, 500);
 
-pub fn mouse(_address: u8, buf: &[u8]) {
+pub type CallbackType = fn(u8, &[u8]);
+
+pub const fn keyboard() -> CallbackType {
+    _keyboard
+}
+
+pub const fn mouse() -> CallbackType {
+    _mouse
+}
+
+#[doc(hidden)]
+pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
     let y_diff = buf[2] as i8;
     log::debug!("{:?}", [x_diff, y_diff]);
@@ -31,6 +42,7 @@ pub fn mouse(_address: u8, buf: &[u8]) {
     };
 }
 
-pub fn keyboard(address: u8, buf: &[u8]) {
+#[doc(hidden)]
+pub fn _keyboard(address: u8, buf: &[u8]) {
     log::debug!("keyboard input: {:?}, {:?}", address, buf);
 }

@@ -3,11 +3,12 @@ use core::{alloc::Allocator, cmp};
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
 use kernel_lib::await_sync;
+use usb_host::USBHost;
 use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
-    ring::trb::{self, event},
+    ring::trb::{self, event, transfer},
     ExtendedCapability,
 };
 
@@ -28,10 +29,12 @@ use super::{
 };
 
 #[derive(Debug)]
-pub struct XhciController<M, A>
+pub struct XhciController<M, A, MF, KF>
 where
     M: Mapper + Clone,
     A: Allocator,
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
 {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     device_manager: DeviceManager<M, A>,
@@ -39,11 +42,14 @@ where
     event_ring: Arc<Mutex<EventRing<A>>>,
     number_of_ports: u8,
     port_configure_state: PortConfigureState,
+    class_driver_manager: ClassDriverManager<MF, KF>,
 }
 
-impl<M> XhciController<M, &'static GlobalAllocator>
+impl<M, MF, KF> XhciController<M, &'static GlobalAllocator, MF, KF>
 where
     M: Mapper + Clone,
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
 {
     /// # Safety
     /// The caller must ensure that the xHCI registers are accessed only through this struct.
@@ -51,7 +57,11 @@ where
     /// # Panics
     /// This method panics if `mmio_base` is not aligned correctly.
     ///
-    pub unsafe fn new(xhci_memory_mapped_io_base_address: usize, mapper: M) -> Self {
+    pub unsafe fn new(
+        xhci_memory_mapped_io_base_address: usize,
+        mapper: M,
+        class_driver_manager: ClassDriverManager<MF, KF>,
+    ) -> Self {
         let mut registers =
             xhci::Registers::new(xhci_memory_mapped_io_base_address, mapper.clone());
         let hccparam1 = registers.capability.hccparams1.read_volatile();
@@ -147,6 +157,7 @@ where
             event_ring,
             number_of_ports,
             port_configure_state,
+            class_driver_manager,
         }
     }
 
@@ -161,11 +172,7 @@ where
         log::debug!("[XHCI] xhc controller starts running!!");
     }
 
-    pub fn process_event<MF, KF>(&mut self, class_drivers: &mut ClassDriverManager<MF, KF>)
-    where
-        MF: Fn(u8, &[u8]),
-        KF: Fn(u8, &[u8]),
-    {
+    pub fn process_event(&mut self) {
         let mut registers = self.registers.lock();
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
@@ -181,7 +188,7 @@ where
             if let Some(trb) = event_ring.pop_already_popped() {
                 drop(event_ring);
                 drop(registers);
-                self.process_event_ring_event(trb, class_drivers);
+                self.process_event_ring_event(trb);
                 return;
             }
             return;
@@ -193,7 +200,7 @@ where
         drop(event_ring);
         let _trb = match popped {
             Ok(event_trb) => {
-                self.process_event_ring_event(event_trb, class_drivers);
+                self.process_event_ring_event(event_trb);
                 return;
             }
             Err(raw) => raw,
@@ -202,20 +209,13 @@ where
         todo!()
     }
 
-    pub fn process_event_ring_event<MF, KF>(
-        &mut self,
-        event_trb: event::Allowed,
-        class_drivers: &mut ClassDriverManager<MF, KF>,
-    ) where
-        MF: Fn(u8, &[u8]),
-        KF: Fn(u8, &[u8]),
-    {
+    pub fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
-                self.process_transfer_event(transfer_event, class_drivers);
+                self.process_transfer_event(transfer_event);
             }
             event::Allowed::CommandCompletion(command_completion) => {
-                self.process_command_completion_event(command_completion, class_drivers)
+                self.process_command_completion_event(command_completion);
             }
             event::Allowed::PortStatusChange(port_status_change) => {
                 self.process_port_status_change_event(port_status_change)
@@ -391,15 +391,7 @@ where
         })
     }
 
-    pub fn initialize_device_at<MF, KF>(
-        &mut self,
-        port_idx: u8,
-        slot_id: u8,
-        class_drivers: &mut ClassDriverManager<MF, KF>,
-    ) where
-        MF: Fn(u8, &[u8]),
-        KF: Fn(u8, &[u8]),
-    {
+    pub fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
         log::debug!(
             "initialize device at: port_id: {}, slot_id: {}",
             port_idx + 1,
@@ -412,6 +404,8 @@ where
         };
         self.port_configure_state
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
+
+        let class_drivers = &mut self.class_driver_manager;
         await_sync!(device.start_initialization(class_drivers));
     }
 
@@ -430,6 +424,10 @@ where
             .read_volatile_at(port_index)
             .portsc
             .current_connect_status()
+    }
+
+    pub fn class_driver_manager_mut(&mut self) -> &mut ClassDriverManager<MF, KF> {
+        &mut self.class_driver_manager
     }
 
     fn reset_controller(registers: &mut xhci::Registers<M>) {
@@ -562,9 +560,11 @@ where
     }
 }
 
-impl<M> XhciController<M, &'static GlobalAllocator>
+impl<M, MF, KF> XhciController<M, &'static GlobalAllocator, MF, KF>
 where
     M: Mapper + Clone,
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
 {
     // process events
 
@@ -586,14 +586,7 @@ where
         }
     }
 
-    fn process_command_completion_event<MF, KF>(
-        &mut self,
-        event: trb::event::CommandCompletion,
-        class_drivers: &mut ClassDriverManager<MF, KF>,
-    ) where
-        MF: Fn(u8, &[u8]),
-        KF: Fn(u8, &[u8]),
-    {
+    fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
         let slot_id = event.slot_id();
         let Ok(completion_code) = event.completion_code() else {
             log::error!(
@@ -688,7 +681,7 @@ where
                     }
                 }
 
-                self.initialize_device_at(port_index, slot_id, class_drivers);
+                self.initialize_device_at(port_index, slot_id);
             }
             trb::command::Allowed::ConfigureEndpoint(_) => {
                 let mut event_ring = self.event_ring.lock();
@@ -710,14 +703,7 @@ where
         }
     }
 
-    fn process_transfer_event<MF, KF>(
-        &mut self,
-        event: trb::event::TransferEvent,
-        class_drivers: &mut ClassDriverManager<MF, KF>,
-    ) where
-        MF: Fn(u8, &[u8]),
-        KF: Fn(u8, &[u8]),
-    {
+    fn process_transfer_event(&mut self, event: trb::event::TransferEvent) {
         log::debug!("TransferEvent received: {:?}", &event);
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
@@ -740,13 +726,53 @@ where
             }
         };
         let slot_id = event.slot_id();
+        let dci = event.endpoint_id();
         let device = self
             .device_manager
             .device_by_slot_id_mut(slot_id as usize)
             .unwrap();
+        let trb_pointer = event.trb_pointer() as *mut TrbRaw;
+        let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
+        if let transfer::Allowed::Normal(normal) = trb {
+            // let transfer_ring = device
+            //     .transfer_ring_at_mut(DeviceContextIndex::checked_new(dci))
+            //     .as_mut()
+            //     .unwrap();
+            let mut registers = self.registers.lock();
+            registers
+                .doorbell
+                .update_volatile_at(slot_id as usize, |r| {
+                    r.set_doorbell_target(dci);
+                    r.set_doorbell_stream_id(0);
+                });
+        }
         // TODO: use appropriate millis
-        class_drivers
+        self.class_driver_manager
             .tick_at(slot_id as usize, 100, device)
             .unwrap();
     }
+}
+
+macro_rules! gen_tick {
+    ($fname:ident, $device:ident) => {
+        pub fn $fname(&mut self, count: usize) -> Result<(), usb_host::DriverError> {
+            use usb_host::Driver;
+            if let Some(slot_id) = self.class_driver_manager.$device().0 {
+                if let Some(host) = self.device_manager.device_host_by_slot_id_mut(slot_id) {
+                    self.class_driver_manager.$device().1.tick(count, host)?;
+                }
+            }
+
+            Ok(())
+        }
+    };
+}
+impl<M, MF, KF> XhciController<M, &'static GlobalAllocator, MF, KF>
+where
+    M: Mapper + Clone,
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+{
+    gen_tick!(tick_keyboard, keyboard);
+    gen_tick!(tick_mouse, mouse);
 }

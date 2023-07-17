@@ -1,7 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 #![feature(lang_items)]
-use core::{arch::asm, ffi::c_void, panic::PanicInfo};
+use core::{arch::asm, panic::PanicInfo};
 
 pub extern crate alloc;
 use common::types::KernelMainArg;
@@ -10,9 +10,9 @@ use kernel::{
     alloc::alloc::GlobalAllocator,
     graphics::{init_graphics, init_logger},
     memory::MemoryMapper,
-    println, serial_println, tick,
-    usb::{class_driver::callbacks, device::DeviceContextInfo},
-    xhci::{controller::XhciController, init_xhci_controller, XHC},
+    println, serial_println,
+    usb::device::DeviceContextInfo,
+    xhci::{init_xhci_controller, XHC},
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
@@ -40,9 +40,6 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     init_xhci_controller();
 
-    let mut class_drivers =
-        kernel::usb::class_driver::ClassDriverManager::new(callbacks::mouse, callbacks::keyboard);
-
     let mut count = 1;
     static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: usb_host::USBHost);
 
@@ -50,8 +47,10 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     let controller = controller.get_mut().unwrap();
     loop {
         count += 1;
-        controller.process_event(&mut class_drivers);
-        tick!(class_drivers, controller, count);
+        if count < 10 {
+            controller.process_event();
+        }
+        controller.tick_mouse(count).unwrap();
     }
 }
 

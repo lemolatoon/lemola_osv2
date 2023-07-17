@@ -219,14 +219,17 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         KF: Fn(u8, &[u8]),
     {
         let device_descriptor = self.request_device_descriptor().await;
-        let buffer_len = self
-            .transfer_ring_at(DeviceContextIndex::ep0())
-            .as_ref()
-            .unwrap()
-            .buffer_len();
-        for _ in 0..buffer_len {
-            // ensure transfer ring is correctly working.
-            let _ = self.request_device_descriptor().await;
+        #[cfg(debug)]
+        {
+            let buffer_len = self
+                .transfer_ring_at(DeviceContextIndex::ep0())
+                .as_ref()
+                .unwrap()
+                .buffer_len();
+            for _ in 0..buffer_len {
+                // ensure transfer ring is correctly working.
+                let _ = self.request_device_descriptor().await;
+            }
         }
         let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
@@ -265,20 +268,25 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
                 let address = self.device_address();
                 log::warn!("boot keyboard interface ignored");
-                class_drivers
-                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                    .unwrap();
-            } else {
-                log::warn!("no book keyboard interface found");
+                // class_drivers
+                //     .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                //     .unwrap();
+                // class_drivers
+                //     .keyboard()
+                //     .1
+                //     .tick_until_running_state(self)
+                //     .unwrap();
             }
-
             if let Some(_mouse_interface) = mouse_interface {
                 let address = self.device_address();
                 class_drivers
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-            } else {
-                log::warn!("no mouse interface found");
+                class_drivers
+                    .mouse()
+                    .1
+                    .tick_until_running_state(self)
+                    .unwrap();
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
@@ -456,7 +464,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 input_control_context.set_add_context_flag(0);
                 match ep.transfer_type() {
                     usb_host::TransferType::Interrupt => {
-                        let transfer_ring = TransferRing::alloc_new(32);
+                        let mut transfer_ring = TransferRing::alloc_new(32);
                         // transfer_ring.fill_with_normal();
                         input_control_context.set_add_context_flag(dci.address() as usize);
                         let device_context = self.input_context.0.device_mut();
@@ -524,19 +532,19 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         }
 
         let event_ring = Arc::clone(&self.event_ring);
-
         let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
+        transfer_ring.dump_state();
         let mut normal = transfer::Normal::new();
         normal
-            .set_interrupt_on_completion()
-            .set_interrupt_on_short_packet()
-            .set_interrupter_target(0)
             .set_data_buffer_pointer(buf.as_ptr() as u64)
             .set_trb_transfer_length(buf.len() as u32)
-            .set_td_size(0);
+            .set_td_size(0)
+            .set_interrupt_on_completion()
+            .set_interrupt_on_short_packet()
+            .set_interrupter_target(0);
         transfer_ring.push(transfer::Allowed::Normal(normal));
-        transfer_ring.dump_state();
 
+        let slot_id = self.slot_id();
         let mut registers = self.registers.lock();
         registers
             .doorbell
@@ -545,7 +553,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 doorbell.set_doorbell_stream_id(0);
             });
         let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-        let slot_id = self.slot_id();
+        log::debug!("before debug");
         let trb = EventRing::get_received_transfer_trb_on_slot(
             event_ring,
             &mut interrupter,
@@ -553,28 +561,55 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         )
         .await;
         let transferred_length = trb.trb_transfer_length();
-        // let transfer_trb = transfer::Allowed::try_from(unsafe {
-        //     (trb.trb_pointer() as *const TrbRaw).read_volatile()
-        // })
-        // .unwrap();
-        // match transfer_trb {
-        //     transfer::Allowed::SetupStage(_) => todo!(),
-        //     transfer::Allowed::DataStage(_) => todo!(),
-        //     transfer::Allowed::StatusStage(_) => todo!(),
-        //     transfer::Allowed::Isoch(_) => todo!(),
-        //     transfer::Allowed::Link(_) => todo!(),
-        //     transfer::Allowed::EventData(_) => todo!(),
-        //     transfer::Allowed::Noop(_) => todo!(),
-        //     transfer::Allowed::Normal(normal) => {
-        //         let buffer = unsafe {
-        //             core::slice::from_raw_parts(
-        //                 normal.data_buffer_pointer() as *const u8,
-        //                 transferred_length as usize,
-        //             )
-        //         };
-        //         buf.copy_from_slice(buffer);
-        //     }
-        // };
+        drop(registers);
+
+        let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
+        transfer_ring.dump_state();
+
+        log::debug!("trb pointer: {:p}", trb.trb_pointer() as *const TrbRaw);
+        let transfer_trb = transfer::Allowed::try_from(unsafe {
+            (trb.trb_pointer() as *const TrbRaw).read_volatile()
+        })
+        .unwrap();
+        match transfer_trb {
+            transfer::Allowed::SetupStage(_) => todo!(),
+            transfer::Allowed::DataStage(_) => todo!(),
+            transfer::Allowed::StatusStage(_) => todo!(),
+            transfer::Allowed::Isoch(_) => todo!(),
+            transfer::Allowed::Link(_) => todo!(),
+            transfer::Allowed::EventData(_) => todo!(),
+            transfer::Allowed::Noop(_) => todo!(),
+            transfer::Allowed::Normal(normal) => {
+                let mut normal_data_buffer_pointer = normal.data_buffer_pointer();
+                normal_data_buffer_pointer = (normal_data_buffer_pointer & 0x0000_0000_ffff_ffff)
+                    << 32
+                    | (normal_data_buffer_pointer & 0xffff_ffff_0000_0000) >> 32;
+                let copying_length = core::cmp::min(transferred_length, buf.len() as u32);
+                let buffer = unsafe {
+                    core::slice::from_raw_parts(
+                        normal_data_buffer_pointer as *const u8,
+                        copying_length as usize,
+                    )
+                };
+                log::debug!("transferred_length {}", transferred_length);
+                let transferred_length_given_buf = unsafe {
+                    core::slice::from_raw_parts_mut(buf.as_mut_ptr(), copying_length as usize)
+                };
+                log::debug!("data_buffer_pointer 0x{:x}", normal_data_buffer_pointer);
+                log::debug!(
+                    "src [{:p} - {:p}] -> dst [{:p} - {:p}]",
+                    buffer.as_ptr(),
+                    unsafe { buffer.as_ptr().add(buffer.len()) },
+                    transferred_length_given_buf.as_mut_ptr(),
+                    unsafe {
+                        transferred_length_given_buf
+                            .as_mut_ptr()
+                            .add(transferred_length_given_buf.len())
+                    }
+                );
+                transferred_length_given_buf.copy_from_slice(buffer);
+            }
+        };
         Ok(transferred_length as usize)
     }
 }
@@ -816,6 +851,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
     ) -> Result<usize, usb_host::TransferError> {
         // await_once_noblocking!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
         //     .unwrap_or(Err(usb_host::TransferError::Retry("transfer is pending")))
+        log::debug!("in_transfer await_sync!");
         await_sync!(self.async_in_transfer(unsafe { core::mem::transmute(ep) }, buf))
     }
 

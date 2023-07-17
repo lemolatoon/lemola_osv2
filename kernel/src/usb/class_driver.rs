@@ -98,6 +98,30 @@ where
             endpoint_searcher,
         }
     }
+
+    pub fn tick_until_running_state(
+        &mut self,
+        host: &mut dyn usb_host::USBHost,
+    ) -> Result<(), DriverError> {
+        let mut millis = 0;
+        while self.devices.iter().any(|d| {
+            d.as_ref()
+                .map_or(false, |dd| dd.state != DeviceState::Running)
+        }) {
+            for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
+                if device.state == DeviceState::Running {
+                    continue;
+                }
+                if let Err(TransferError::Permanent(e)) =
+                    device.fsm(millis, host, &mut self.callback)
+                {
+                    return Err(DriverError::Permanent(device.addr, e));
+                };
+                millis += 1;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<
@@ -772,6 +796,7 @@ macro_rules! tick {
     };
 }
 
+#[derive(Debug)]
 pub struct ClassDriverManager<MF, KF>
 where
     MF: Fn(u8, &[u8]),

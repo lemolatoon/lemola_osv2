@@ -1,3 +1,4 @@
+use bit_field::BitField;
 use xhci::ring::trb::{self};
 
 #[derive(Debug, Clone)]
@@ -11,6 +12,11 @@ impl TrbRaw {
 
     pub fn cycle_bit(&self) -> bool {
         unsafe { core::mem::transmute::<_, trb::Link>(self.clone().into_raw()) }.cycle_bit()
+    }
+
+    pub fn toggle_cycle_bit(&mut self) {
+        let toggled = !self.cycle_bit();
+        self.0[3].set_bit(0, toggled);
     }
 
     /// # Safety

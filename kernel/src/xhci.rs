@@ -2,7 +2,12 @@ use core::{cell::OnceCell, ffi::c_void};
 
 use spin::Mutex;
 
-use crate::{alloc::alloc::GlobalAllocator, memory::MemoryMapper, serial_println};
+use crate::{
+    alloc::alloc::GlobalAllocator,
+    memory::MemoryMapper,
+    serial_println,
+    usb::class_driver::callbacks::{self, CallbackType},
+};
 
 use self::controller::XhciController;
 
@@ -14,8 +19,9 @@ pub mod port;
 pub mod transfer_ring;
 pub mod trb;
 
-pub static XHC: Mutex<OnceCell<XhciController<MemoryMapper, &'static GlobalAllocator>>> =
-    Mutex::new(OnceCell::new());
+pub static XHC: Mutex<
+    OnceCell<XhciController<MemoryMapper, &'static GlobalAllocator, CallbackType, CallbackType>>,
+> = Mutex::new(OnceCell::new());
 
 pub fn init_xhci_controller() {
     let devices = crate::pci::register::scan_all_bus();
@@ -56,9 +62,15 @@ pub fn init_xhci_controller() {
     let xhc_bar = xhci_device.read_bar(0).unwrap();
     let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
 
+    let class_drivers = crate::usb::class_driver::ClassDriverManager::new(
+        callbacks::mouse(),
+        callbacks::keyboard(),
+    );
+
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
     let memory_mapper = crate::memory::MemoryMapper::new();
-    let mut controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
+    let mut controller =
+        unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper, class_drivers) };
     log::info!("xhc initialized");
     controller.run();
 
