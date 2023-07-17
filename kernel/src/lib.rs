@@ -8,6 +8,7 @@
 #![feature(adt_const_params)]
 #![feature(allocator_api)]
 #![feature(async_fn_in_trait)]
+#![feature(abi_x86_interrupt)]
 pub mod alloc;
 pub mod font;
 pub mod graphics;
