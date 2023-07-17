@@ -18,6 +18,20 @@ macro_rules! await_sync {
     }};
 }
 
+#[macro_export]
+macro_rules! await_once_noblocking {
+    ($e:expr) => {{
+        use core::future::Future;
+        let mut pinned_future = ::core::pin::pin!($e);
+        let waker = $crate::futures::dummy_waker();
+        let context = &mut ::core::task::Context::from_waker(&waker);
+        match pinned_future.as_mut().poll(context) {
+            ::core::task::Poll::Ready(value) => Some(value),
+            ::core::task::Poll::Pending => None,
+        }
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use core::future::Future;
@@ -79,5 +93,50 @@ mod tests {
                 core::task::Poll::Ready(self.value)
             }
         }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct TimesPendingFuture<T: Unpin + Copy> {
+        value: T,
+        count: usize,
+    }
+
+    impl<T: Unpin + Copy> TimesPendingFuture<T> {
+        fn new(value: T, count: usize) -> Self {
+            Self { value, count }
+        }
+    }
+
+    impl<T: Unpin + Copy> Future for TimesPendingFuture<T> {
+        type Output = T;
+        fn poll(
+            self: core::pin::Pin<&mut Self>,
+            _: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<Self::Output> {
+            if self.count > 0 {
+                self.get_mut().count -= 1;
+                core::task::Poll::Pending
+            } else {
+                core::task::Poll::Ready(self.value)
+            }
+        }
+    }
+
+    #[test]
+    fn test_await_once_noblocking() {
+        let future = TimesPendingFuture::new(1, 3);
+        assert_eq!(await_once_noblocking!(future), None);
+        let future = TimesPendingFuture::new(1, 3);
+        assert_eq!(await_sync!(future), 1);
+        let future = TimesPendingFuture::new(1, 0);
+        assert_eq!(await_once_noblocking!(future), Some(1));
+        async fn return_1() -> u32 {
+            1
+        }
+        async fn just_await() -> u32 {
+            return_1().await
+        }
+        assert_eq!(await_once_noblocking!(return_1()), Some(1));
+        assert_eq!(await_once_noblocking!(just_await()), Some(1));
     }
 }
