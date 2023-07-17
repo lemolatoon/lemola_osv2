@@ -1,11 +1,19 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![feature(new_uninit)]
+#![feature(allocator_api)]
+#![feature(generic_arg_infer)]
 
+pub mod alloc;
 pub mod futures;
 pub mod logger;
+pub mod render;
+pub mod shapes;
+pub mod write_to;
 use core::fmt;
 
 use common::types::PixcelFormat;
 use gen_font::gen_font;
+use render::Renderer;
 
 gen_font!();
 
@@ -40,13 +48,12 @@ pub trait PixcelInfo {
     fn vertical_resolution(&self) -> usize;
     fn pixcels_per_scan_line(&self) -> usize;
 }
+
 pub trait PixcelWritable {
     fn write(&self, x: usize, y: usize, color: Color);
 }
 
-pub trait PixcelWriterTrait: PixcelWritable + PixcelInfo + AsciiWriter {}
-
-pub trait AsciiWriter: PixcelWritable + PixcelInfo {
+pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {
     fn write_ascii(&self, x: usize, y: usize, c: char, bg_color: Color, fg_color: Color) {
         let Some(font) = FONT.get(c as usize) else {
             return;
@@ -115,6 +122,10 @@ impl<'a, const N_ROW: usize, const N_COLUMN: usize> Writer<'a, N_ROW, N_COLUMN> 
         self.buffer[self.position.y][self.position.x] = c;
     }
 
+    pub fn pixcel_writer(&self) -> &'a (dyn AsciiWriter + Send + Sync + 'a) {
+        self.writer
+    }
+
     pub fn put_char(&mut self, c: char) {
         if c == '\n' {
             self.new_line();
@@ -123,6 +134,9 @@ impl<'a, const N_ROW: usize, const N_COLUMN: usize> Writer<'a, N_ROW, N_COLUMN> 
             self.position.x += 1;
         } else {
             self.new_line();
+            if self.position.y == N_ROW {
+                self.scroll(1);
+            }
             self.store(c);
             self.position.x += 1;
         }
@@ -177,7 +191,7 @@ impl core::fmt::Debug for &(dyn AsciiWriter + Send + Sync) {
 
 #[cfg(test)]
 mod test {
-    use core::cell::RefCell;
+    use core::{cell::RefCell, fmt::Write};
 
     use super::*;
     const N_ROW: usize = 10;
@@ -281,6 +295,19 @@ mod test {
             let mut expected = [' '; 10];
             expected[0] = (('a' as u8) + ((190 + idx) % 26) as u8) as char;
             assert_eq!(mock_writer.buffer.borrow()[idx], expected);
+        }
+    }
+
+    #[test]
+    fn test_writer3() {
+        let writer = MockWriter::new();
+        let mut writer = Writer::<N_ROW, N_COLUMN>::new(&writer);
+        // 10 * 10
+        let mock_writer = downcast(writer.writer);
+        writer.write_str("a".repeat(200).as_str()).unwrap();
+
+        for idx in 0..10 {
+            assert_eq!(mock_writer.buffer.borrow()[idx], ['a'; 10]);
         }
     }
 }

@@ -1,5 +1,6 @@
 .PHONY: FORCE
 PROFILE=debug
+QEMU=qemu-system-x86_64
 
 ifeq ($(PROFILE),release)
 	CARGO_FLAGS=--release
@@ -31,17 +32,27 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel
 	sudo umount mnt
 
 run: disk.img
-	qemu-system-x86_64 \
+	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
-		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
+		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw,readonly \
 		-drive file=disk.img,format=raw \
+		-device nec-usb-xhci,id=xhci \
+ 		-device usb-mouse \
+		-device usb-kbd \
+		-serial telnet::5555,server,nowait \
 		-monitor stdio
+# for serial port
+# telnet localhost 5555
 
 run_gdb: disk.img
-	qemu-system-x86_64 \
+	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
 		-drive file=disk.img,format=raw \
+		-device nec-usb-xhci,id=xhci \
+		-device usb-kbd \
+		-device usb-mouse \
+		-serial telnet::5555,server,nowait \
 		-monitor stdio \
 		-gdb tcp::12345 -S
 # on gdb
@@ -117,5 +128,19 @@ clippy:
 	cd kernel-lib && \
 	cargo clippy
 
+clean:
+	cd kernel && \
+	cargo clean
+	cd common && \
+	cargo clean
+	cd gen_font && \
+	cargo clean
+	cd bootloader && \
+	cargo clean
+	cd kernel-lib && \
+	cargo clean
+	
+
 kill:
 	killall -9 qemu-system-x86_64
+	git checkout f249e14540fc9ea6cabe4bfd932db2888e0d97ee -- ovmf/lemola_os_ovmf_vars.fd

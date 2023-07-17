@@ -2,15 +2,20 @@ use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
 use kernel_lib::{
-    logger::CharWriter, AsciiWriter, Color, PixcelInfo, PixcelWritable, PixcelWriterTrait, Writer,
+    logger::{CharWriter, DecoratedLog},
+    AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,
 };
 use once_cell::unsync::OnceCell;
 use spin::Mutex;
 
+use crate::serial_print;
+
+#[derive(Debug, Clone, Copy)]
 pub struct Rgb;
+#[derive(Debug, Clone, Copy)]
 pub struct Bgr;
 
-pub trait MarkerColor {
+pub trait MarkerColor: Copy {
     fn pixcel_format() -> PixcelFormat;
 }
 impl MarkerColor for Rgb {
@@ -24,6 +29,7 @@ impl MarkerColor for Bgr {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct PixcelWriter<T: MarkerColor> {
     frame_buffer_base: *mut u8,
     pixcels_per_scan_line: usize,
@@ -51,9 +57,13 @@ impl PixcelWriter<Rgb> {
     pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
         let offset = offset * 4;
         unsafe {
-            *self.frame_buffer_base.add(offset) = color.r;
-            *self.frame_buffer_base.add(offset + 1) = color.g;
-            *self.frame_buffer_base.add(offset + 2) = color.b;
+            self.frame_buffer_base.add(offset).write_volatile(color.r);
+            self.frame_buffer_base
+                .add(offset + 1)
+                .write_volatile(color.g);
+            self.frame_buffer_base
+                .add(offset + 2)
+                .write_volatile(color.b);
         }
     }
 }
@@ -91,34 +101,33 @@ impl PixcelWriter<Bgr> {
     pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
         let offset = offset * 4;
         unsafe {
-            *self.frame_buffer_base.add(offset) = color.b;
-            *self.frame_buffer_base.add(offset + 1) = color.g;
-            *self.frame_buffer_base.add(offset + 2) = color.r;
+            self.frame_buffer_base.add(offset).write_volatile(color.b);
+            self.frame_buffer_base
+                .add(offset + 1)
+                .write_volatile(color.g);
+            self.frame_buffer_base
+                .add(offset + 2)
+                .write_volatile(color.r);
         }
     }
 }
 
 pub struct PixcelWriterBuilder;
 
+pub union PixcelWriterUnion {
+    rgb: PixcelWriter<Rgb>,
+    bgr: PixcelWriter<Bgr>,
+    none: (),
+}
+
 /// Safety: frame_buffer_base is write only.
 unsafe impl<T: MarkerColor> Sync for PixcelWriter<T> {}
 unsafe impl<T: MarkerColor> Send for PixcelWriter<T> {}
 
 impl PixcelWriterBuilder {
-    const fn cmp_max(a: usize, b: usize) -> usize {
-        if a > b {
-            a
-        } else {
-            b
-        }
-    }
-    pub const PIXCEL_WRITER_NECESSARY_BUF_SIZE: usize = Self::cmp_max(
-        core::mem::size_of::<PixcelWriter<Rgb>>(),
-        core::mem::size_of::<PixcelWriter<Bgr>>(),
-    );
     pub fn get_writer<'buf>(
         graphics_info: &GraphicsInfo,
-        buf: &'buf mut [u8; Self::PIXCEL_WRITER_NECESSARY_BUF_SIZE],
+        buf: &'buf mut PixcelWriterUnion,
     ) -> &'buf (dyn AsciiWriter + Send + Sync) {
         let frame_buffer_base = graphics_info.base();
         let pixcels_per_scan_line = graphics_info.stride();
@@ -131,14 +140,9 @@ impl PixcelWriterBuilder {
                     graphics_info.horizontal_resolution(),
                     graphics_info.vertical_resolution(),
                 );
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        &pixcel_writer,
-                        buf.as_mut_ptr() as *mut PixcelWriter<Rgb>,
-                        1,
-                    );
-                };
-                unsafe { &*(buf.as_ptr() as *const PixcelWriter<Rgb>) }
+                buf.rgb = pixcel_writer;
+                // Safety: buf.rgb is initialized at previous line.
+                unsafe { &buf.rgb }
             }
             PixcelFormat::Bgr => {
                 let pixcel_writer = PixcelWriter::<Bgr>::new_raw(
@@ -147,21 +151,13 @@ impl PixcelWriterBuilder {
                     graphics_info.horizontal_resolution(),
                     graphics_info.vertical_resolution(),
                 );
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        &pixcel_writer,
-                        buf.as_mut_ptr() as *mut PixcelWriter<Bgr>,
-                        1,
-                    );
-                };
-                unsafe { &*(buf.as_ptr() as *const PixcelWriter<Bgr>) }
+                buf.bgr = pixcel_writer;
+                // Safety: buf.bgr is initialized at previous line.
+                unsafe { &buf.bgr }
             }
         }
     }
 }
-
-impl PixcelWriterTrait for PixcelWriter<Rgb> {}
-impl PixcelWriterTrait for PixcelWriter<Bgr> {}
 
 impl<T: MarkerColor> PixcelInfo for PixcelWriter<T> {
     fn get_pixcel_format(&self) -> PixcelFormat {
@@ -196,12 +192,16 @@ where
 
 pub const N_CHAR_PER_LINE: usize = 80;
 pub const N_WRITEABLE_LINE: usize = 25;
-static mut _WRITER_BUF: [u8; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE] =
-    [0; PixcelWriterBuilder::PIXCEL_WRITER_NECESSARY_BUF_SIZE];
+static mut UNSAFE_WRITER_BUF: PixcelWriterUnion = PixcelWriterUnion { none: () };
 pub static WRITER: CharWriter<N_CHAR_PER_LINE, N_WRITEABLE_LINE> =
     CharWriter(Mutex::new(OnceCell::new()));
 
-pub fn init_graphics(graphics_info: GraphicsInfo) {
+pub fn get_pixcel_writer() -> Option<&'static (dyn AsciiWriter + Send + Sync)> {
+    Some(WRITER.lock().get()?.pixcel_writer())
+}
+
+/// init graphics and return pixcel_writer
+pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter + Send + Sync) {
     // clear
     for y in 0..graphics_info.vertical_resolution() {
         for x in 0..graphics_info.horizontal_resolution() {
@@ -214,16 +214,80 @@ pub fn init_graphics(graphics_info: GraphicsInfo) {
         }
     }
     let writer = WRITER.0.lock();
+    let pixcel_writer =
+        PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut UNSAFE_WRITER_BUF });
     writer.get_or_init(|| {
-        let pixcel_writer =
-            PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut _WRITER_BUF });
         let writer = Writer::new(pixcel_writer);
         writer
     });
+    pixcel_writer
+}
+
+pub struct SerialAndVgaCharWriter;
+
+impl SerialAndVgaCharWriter {
+    pub const fn new() -> Self {
+        Self {}
+    }
+}
+static SERIAL_VGA_WRITER: SerialAndVgaCharWriter = SerialAndVgaCharWriter::new();
+pub struct InstantWriter<F: Fn(&str)> {
+    f: F,
+}
+impl<F: Fn(&str)> InstantWriter<F> {
+    pub fn new(f: F) -> Self {
+        Self { f }
+    }
+}
+impl<F: Fn(&str)> fmt::Write for InstantWriter<F> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        (self.f)(s);
+        Ok(())
+    }
+}
+impl log::Log for SerialAndVgaCharWriter {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        WRITER.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            if record.level() <= log::Level::Info {
+                let mut serial_vga_writer = InstantWriter::new(|s| {
+                    serial_print!("{}", s);
+                    crate::print!("{}", s)
+                });
+                DecoratedLog::write(
+                    &mut serial_vga_writer,
+                    record.level(),
+                    record.args(),
+                    record.file().unwrap_or("<unknown>"),
+                    record.line().unwrap_or(0),
+                )
+                .unwrap();
+            } else {
+                // let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
+                let mut serial_writer = InstantWriter::new(|s| {
+                    serial_print!("{}", s);
+                    crate::print!("{}", s)
+                });
+                DecoratedLog::write(
+                    &mut serial_writer,
+                    record.level(),
+                    record.args(),
+                    record.file().unwrap_or("<unknown>"),
+                    record.line().unwrap_or(0),
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    fn flush(&self) {}
 }
 
 pub fn init_logger() {
-    log::set_logger(&WRITER)
+    log::set_logger(&SERIAL_VGA_WRITER)
         .map(|()| {
             log::set_max_level(log::LevelFilter::Trace);
             log::info!("logger initialized");

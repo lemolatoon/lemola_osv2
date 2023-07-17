@@ -1,10 +1,10 @@
 {
-    "rust-analyzer.cargo.target": "thumbv7em-none-eabihf",
-    "rust-analyzer.checkOnSave.allTargets": false,
+    "rust-analyzer.check.allTargets": false,
     "rust-analyzer.linkedProjects": [
         "./kernel/Cargo.toml",
         "./bootloader/Cargo.toml",
         "./gen_font/Cargo.toml",
-        "./kernel-lib/Cargo.toml"
+        "./kernel-lib/Cargo.toml",
+        "./common/Cargo.toml",
     ],
 }

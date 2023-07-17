@@ -26,7 +26,7 @@ use uefi::{
 
 #[repr(C)]
 struct AlignedU8Array<const N: usize> {
-    _align: [u16; 0],
+    _align: [u64; 0],
     data: [u8; N],
 }
 
@@ -88,8 +88,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             }
             Ok(Some(_)) => continue,
             Ok(None) => {
-                log::info!("There's no entry in root_dir");
-                return Status::ABORTED;
+                panic!("There's no entry in root_dir")
             }
             Err(err) => {
                 panic!("Failed to read_entry, {:?}", err);
