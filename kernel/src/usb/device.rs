@@ -266,7 +266,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let address = self.device_address();
+                let _address = self.device_address();
                 log::warn!("boot keyboard interface ignored");
                 // class_drivers
                 //     .add_keyboard_device(self.slot_id(), device_descriptor, address)
@@ -464,7 +464,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 input_control_context.set_add_context_flag(0);
                 match ep.transfer_type() {
                     usb_host::TransferType::Interrupt => {
-                        let mut transfer_ring = TransferRing::alloc_new(32);
+                        let transfer_ring = TransferRing::alloc_new(32);
                         // transfer_ring.fill_with_normal();
                         input_control_context.set_add_context_flag(dci.address() as usize);
                         let device_context = self.input_context.0.device_mut();

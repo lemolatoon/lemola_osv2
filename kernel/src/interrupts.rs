@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 use x86_64::{
     set_general_handler,
     structures::idt::{self, InterruptStackFrame},
@@ -14,7 +12,7 @@ fn notify_end_of_interrupt() {
     unsafe { PTR.write_volatile(0) };
 }
 
-fn xhci_interrupt_handler(stack_frame: InterruptStackFrame, index: u8, error_code: Option<u64>) {
+fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_code: Option<u64>) {
     let mut xhc = XHC.lock();
     if let Some(xhc) = xhc.get_mut() {
         xhc.process_event();

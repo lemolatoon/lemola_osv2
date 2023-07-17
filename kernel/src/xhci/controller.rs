@@ -3,7 +3,6 @@ use core::{alloc::Allocator, cmp};
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
 use kernel_lib::await_sync;
-use usb_host::USBHost;
 use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
@@ -733,7 +732,7 @@ where
             .unwrap();
         let trb_pointer = event.trb_pointer() as *mut TrbRaw;
         let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
-        if let transfer::Allowed::Normal(normal) = trb {
+        if let transfer::Allowed::Normal(_normal) = trb {
             // let transfer_ring = device
             //     .transfer_ring_at_mut(DeviceContextIndex::checked_new(dci))
             //     .as_mut()

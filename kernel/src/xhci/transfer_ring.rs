@@ -10,7 +10,7 @@ use crate::alloc::alloc::{
 };
 use crate::graphics::InstantWriter;
 use crate::memory::PAGE_SIZE;
-use crate::{print, serial_print};
+use crate::serial_print;
 
 use super::trb::TrbRaw;
 
@@ -51,50 +51,6 @@ impl TransferRing<&'static GlobalAllocator> {
             .unwrap()
     }
 
-    #[deprecated]
-    pub fn fill_with_normal(&mut self) {
-        for _ in 0..(self.trb_buffer.len() - 1) * 2 {
-            let mut normal = transfer::Normal::new();
-            const BUF_LENGTH: usize = 4096;
-            let buffer =
-                alloc_array_with_boundary_with_default_else(BUF_LENGTH, 4096, 4096, || 0u8)
-                    .unwrap();
-            log::debug!("allocated buffer for normal trb: {:p}", buffer.as_ptr());
-            normal
-                .set_data_buffer_pointer(buffer.as_ptr() as u64)
-                .set_trb_transfer_length(BUF_LENGTH as u32)
-                .set_td_size(0)
-                .set_interrupt_on_completion()
-                .set_interrupt_on_short_packet()
-                .set_interrupter_target(0);
-            self.push(transfer::Allowed::Normal(normal));
-        }
-        assert_eq!(self.write_index, 0);
-        self.try_flip_push();
-        self.dump_state();
-    }
-
-    #[deprecated]
-    pub fn try_flip_push(&mut self) -> Option<*mut TrbRaw> {
-        let cmd = transfer::Allowed::try_from(unsafe {
-            (&mut self.trb_buffer[self.write_index] as *mut TrbRaw).read_volatile()
-        })
-        .unwrap();
-
-        let prev_index = self
-            .write_index
-            .checked_sub(1)
-            .unwrap_or(self.trb_buffer.len() - 1);
-
-        if self.cycle_bit == cmd.cycle_bit()
-            || self.cycle_bit == self.trb_buffer[prev_index].cycle_bit()
-        {
-            return None;
-        }
-
-        Some(self.push(cmd))
-    }
-
     pub fn cycle_bit(&self) -> bool {
         self.cycle_bit
     }
@@ -128,7 +84,7 @@ impl TransferRing<&'static GlobalAllocator> {
                 }
             });
         writeln!(writer).unwrap();
-        for _ in 0..(self.write_index.checked_sub(1).unwrap_or(0)) {
+        for _ in 0..(self.write_index.saturating_sub(1)) {
             write!(writer, " ").unwrap();
         }
         writeln!(writer, "^").unwrap();
