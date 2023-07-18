@@ -3,39 +3,40 @@ use x86_64::{
     structures::idt::{self, InterruptStackFrame},
 };
 
-use crate::{serial_println, xhci::XHC};
+use crate::xhci::XHC;
 
 static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 
-fn notify_end_of_interrupt() {
-    const PTR: *mut i32 = 0xfee000b0 as *mut i32;
-    unsafe { PTR.write_volatile(0) };
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum InterruptVector {
+    Xhci = 14,
 }
 
 fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_code: Option<u64>) {
+    log::info!("xhci interrupt handler called");
     let mut xhc = XHC.lock();
     if let Some(xhc) = xhc.get_mut() {
         xhc.process_event();
     }
-
-    notify_end_of_interrupt();
 }
 
 fn general_handler(stack_frame: InterruptStackFrame, index: u8, error_code: Option<u64>) {
-    serial_println!(
+    log::error!(
         "Unhandled interrupt: {}, {:?}, {:?}",
         index,
         stack_frame.clone(),
         error_code
     );
-    unsafe { core::ptr::null_mut::<u8>().write_volatile(0) };
-    notify_end_of_interrupt();
 }
 
 pub fn init_gdt() {
     let idt = unsafe { &mut IDT };
     set_general_handler!(idt, general_handler, 0..14);
+
     set_general_handler!(idt, xhci_interrupt_handler, 14);
+    static_assertions::const_assert_eq!(InterruptVector::Xhci as u8, 14);
+
     set_general_handler!(idt, general_handler, 15..64);
 
     idt.load();

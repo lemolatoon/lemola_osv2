@@ -4,8 +4,9 @@ use spin::Mutex;
 
 use crate::{
     alloc::alloc::GlobalAllocator,
+    interrupts::InterruptVector,
     memory::MemoryMapper,
-    serial_println,
+    pci, serial_println,
     usb::class_driver::callbacks::{self, CallbackType},
 };
 
@@ -61,6 +62,17 @@ pub fn init_xhci_controller() {
     );
     let xhc_bar = xhci_device.read_bar(0).unwrap();
     let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
+
+    // bootstrap processor's id
+    let bsp_local_apic_id: u8 = unsafe { (0xfee00020 as *mut u32).read_volatile() as u8 };
+    pci::configure_msi_fixed_destination(
+        xhci_device,
+        bsp_local_apic_id,
+        pci::MSITriggerMode::Level,
+        pci::MSIDeliveryMode::Fixed,
+        InterruptVector::Xhci,
+        0,
+    );
 
     let class_drivers = crate::usb::class_driver::ClassDriverManager::new(
         callbacks::mouse(),
