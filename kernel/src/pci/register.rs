@@ -32,6 +32,9 @@ unsafe fn write_address(address: PciConfigAddress) {
 unsafe fn read_data_raw() -> u32 {
     io_in_32(CONFIG_DATA)
 }
+unsafe fn write_data_raw(data: u32) {
+    io_out_32(CONFIG_DATA, data);
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PciDevice {
@@ -71,6 +74,14 @@ impl PciDevice {
         unsafe {
             write_address(addr);
             read_data_raw()
+        }
+    }
+
+    pub fn write_conf_reg(&self, reg_addr: u8, value: u32) {
+        let addr = PciConfigAddress::new(self.bus, self.device, self.function, reg_addr);
+        unsafe {
+            write_address(addr);
+            write_data_raw(value);
         }
     }
 
