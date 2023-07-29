@@ -50,9 +50,10 @@ pub fn configure_msi(
     num_vector_exponent: usize,
 ) {
     let cap_addr = pci_device.read_capabilities_pointer();
-    let iter = MsiCapabilityIterator::new(cap_addr);
+    let iter = MsiCapabilityIterator::new(pci_device, cap_addr);
     let mut written = false;
     for (cap_addr, mut msi_cap) in iter {
+        log::debug!("MSI capability found at {:#x}\n{:x?}", cap_addr, &msi_cap);
         let mut message_control = msi_cap.message_control();
         if message_control.multiple_message_capable() <= num_vector_exponent as u16 {
             message_control.set_multiple_message_enable(message_control.multiple_message_capable());
@@ -83,14 +84,24 @@ pub fn write_msi_capability(device: &PciDevice, cap_addr: u8, msi_cap: MsiCapabi
         device.write_conf_reg(msg_data_addr + 4, msi_cap.mask_bits());
         device.write_conf_reg(msg_data_addr + 8, msi_cap.pending_bits());
     }
+    todo!()
 }
 
 // https://wiki.osdev.org/PCI#Enabling_MSI
 
-#[derive(Debug)]
-pub struct MsiCapability([u32; 6]);
-
 pub struct MessageControl(u16);
+
+impl core::fmt::Debug for MessageControl {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MessageControl")
+            .field("per_vector_masking", &self.per_vector_masking())
+            .field("address_64_bit_capable", &self.address_64_bit_capable())
+            .field("multiple_message_enable", &self.multiple_message_enable())
+            .field("multiple_message_capable", &self.multiple_message_capable())
+            .field("enable", &self.enable())
+            .finish()
+    }
+}
 
 impl MessageControl {
     pub fn read_at(cap_addr: u8) -> Self {
@@ -117,6 +128,14 @@ impl MessageControl {
         self.0.set_bits(4..7, value);
     }
 
+    pub fn address_64_bit_capable(&self) -> bool {
+        self.0.get_bit(7)
+    }
+
+    pub fn set_address_64_bit_capable(&mut self, value: bool) {
+        self.0.set_bit(7, value);
+    }
+
     pub fn multiple_message_capable(&self) -> u16 {
         self.0.get_bits(1..4)
     }
@@ -138,15 +157,60 @@ impl MessageControl {
     }
 }
 
+pub struct MsiCapability([u32; 6]);
+
+impl core::fmt::Debug for MsiCapability {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MsiCapability")
+            .field("message_control", &self.message_control())
+            .field("next_pointer", &self.next_pointer())
+            .field("capability_id", &self.capability_id())
+            .field("message_address", &self.message_address())
+            .field("message_data", &self.message_data())
+            .field("mask_bits", &self.mask_bits())
+            .field("pending_bits", &self.pending_bits())
+            .finish()
+    }
+}
+
 impl MsiCapability {
     pub unsafe fn new(device: &PciDevice, cap_addr: u8) -> Self {
         let mut cap = Self([0; 6]);
-        let mut message_control = MessageControl(device.read_configuration_space(cap_addr) as u16);
+
+        // cap + 0x0
+        let header = device.read_configuration_space(cap_addr);
+        let message_control = MessageControl(header.get_bits(16..32) as u16);
         cap.set_message_control(message_control);
+        cap.set_next_pointer(header.get_bits(8..16) as u8);
+        cap.set_capability_id(header.get_bits(0..8) as u8);
 
-        let msg_data_addr = cap_addr + 8;
+        // cap + 0x4
+        let message_address_lower = device.read_configuration_space(cap_addr + 4) as u64;
 
-        todo!();
+        let mut msg_data_addr = cap_addr + 8;
+
+        let message_address = if cap.message_control().address_64_bit_capable() {
+            let message_address_upper = device.read_configuration_space(cap_addr + 8) as u64;
+            msg_data_addr = cap_addr + 12;
+            message_address_upper << 32 | message_address_lower
+        } else {
+            message_address_lower
+        };
+        cap.set_message_address(message_address);
+
+        let message_data = device
+            .read_configuration_space(msg_data_addr)
+            .get_bits(0..16) as u16;
+        cap.set_message_data(message_data);
+
+        if cap.message_control().per_vector_masking() {
+            let mask_bits = device.read_configuration_space(msg_data_addr + 4);
+            let pending_bits = device.read_configuration_space(msg_data_addr + 8);
+            cap.set_mask_bits(mask_bits);
+            cap.set_pending_bits(pending_bits);
+        }
+
+        cap
     }
 
     pub fn write_at(&self, cap_addr: u8) {
@@ -165,8 +229,16 @@ impl MsiCapability {
         self.0[0].get_bits(8..16) as u8
     }
 
+    pub fn set_next_pointer(&mut self, value: u8) {
+        self.0[0].set_bits(8..16, value as u32);
+    }
+
     pub fn capability_id(&self) -> u8 {
         self.0[0].get_bits(0..8) as u8
+    }
+
+    pub fn set_capability_id(&mut self, value: u8) {
+        self.0[0].set_bits(0..8, value as u32);
     }
 
     pub fn message_address(&self) -> u64 {
@@ -193,25 +265,35 @@ impl MsiCapability {
         self.0[4]
     }
 
+    pub fn set_mask_bits(&mut self, mask_bits: u32) {
+        self.0[4] = mask_bits;
+    }
+
     pub fn pending_bits(&self) -> u32 {
         self.0[5]
+    }
+
+    pub fn set_pending_bits(&mut self, pending_bits: u32) {
+        self.0[5] = pending_bits;
     }
 }
 
 #[derive(Debug)]
-pub struct MsiCapabilityIterator {
+pub struct MsiCapabilityIterator<'a> {
+    device: &'a PciDevice,
     current_cap_addr: u8,
 }
 
-impl MsiCapabilityIterator {
-    pub fn new(cap_addr: u8) -> Self {
+impl<'a> MsiCapabilityIterator<'a> {
+    pub fn new(pci_device: &'a PciDevice, cap_addr: u8) -> Self {
         Self {
+            device: pci_device,
             current_cap_addr: cap_addr,
         }
     }
 }
 
-impl Iterator for MsiCapabilityIterator {
+impl<'a> Iterator for MsiCapabilityIterator<'a> {
     type Item = (u8, MsiCapability);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -219,17 +301,19 @@ impl Iterator for MsiCapabilityIterator {
             return None;
         }
         log::debug!("reading msi cap at 0x{:x}", self.current_cap_addr);
-        let mut cap = unsafe { MsiCapability::new(self.current_cap_addr) };
+        let mut cap = unsafe { MsiCapability::new(self.device, self.current_cap_addr) };
         while !(cap.capability_id() == 0x05) {
             // MSIでない
-            log::info!("skip cap: {:x?}", &cap);
+            log::debug!("not msi cap: {:x?} @ {:x}", &cap, self.current_cap_addr);
             self.current_cap_addr = cap.next_pointer();
             if self.current_cap_addr == 0 {
                 return None;
             }
-            cap = unsafe { MsiCapability::new(self.current_cap_addr) };
+            cap = unsafe { MsiCapability::new(self.device, self.current_cap_addr) };
         }
+
+        let current_cap_addr = self.current_cap_addr;
         self.current_cap_addr = cap.next_pointer();
-        Some((self.current_cap_addr, cap))
+        Some((current_cap_addr, cap))
     }
 }
