@@ -134,6 +134,9 @@ where
 
         // enable interrupt for the primary interrupter
         let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
+        primary_interrupter.imod.update_volatile(|imodi| {
+            imodi.set_interrupt_moderation_interval(4000);
+        });
         primary_interrupter
             .iman
             .update_volatile(|interrupter_management_register| {
