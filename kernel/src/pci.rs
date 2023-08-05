@@ -1,5 +1,3 @@
-use core::mem::MaybeUninit;
-
 use bit_field::BitField;
 
 use crate::interrupts::InterruptVector;
@@ -35,6 +33,7 @@ pub fn configure_msi_fixed_destination(
     num_vector_exponent: usize,
 ) {
     let msg_addr = 0xfee0_0000 | ((apic_id as u32) << 12);
+    log::debug!("msg_addr: {:#x}", msg_addr);
     let mut msg_data = ((delivery_mode as u32) << 8) | interrupt_vector as u32;
     if let MSITriggerMode::Level = trigger_mode {
         msg_data |= 0xc000;
@@ -64,9 +63,11 @@ pub fn configure_msi(
         message_control.set_enable(true);
         msi_cap.set_message_control(message_control);
         msi_cap.set_message_address(msg_addr as u64);
+        log::debug!("msg_data: {:#x}", msg_data);
         msi_cap.set_message_data(msg_data as u16);
 
         log::debug!("MSI capability updated@0x{:x}\n{:x?}", cap_addr, &msi_cap);
+        log::debug!("MSI capability raw: {:x?}", &msi_cap.0);
         write_msi_capability(pci_device, cap_addr, msi_cap);
         written = true;
     }
