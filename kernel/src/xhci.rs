@@ -64,7 +64,8 @@ pub fn init_xhci_controller() {
     let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
 
     // bootstrap processor's id
-    let bsp_local_apic_id: u8 = unsafe { (0xfee00020 as *mut u32).read_volatile() as u8 };
+    let bsp_local_apic_id: u8 =
+        (unsafe { (0xfee00020 as *mut u32).read_volatile() as u32 } >> 24) as u8;
     pci::configure_msi_fixed_destination(
         xhci_device,
         bsp_local_apic_id,

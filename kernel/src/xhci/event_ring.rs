@@ -275,6 +275,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
                 }
                 Ok(trb) => {
                     // EventRing does not have front
+                    log::warn!("ignoring trb: {:?}", trb);
                     event_ring.push(trb);
                     Poll::Pending
                 }
@@ -291,6 +292,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
                     }
                     Ok(trb) => {
                         // EventRing does not have front
+                        log::warn!("ignoring trb: {:?}", trb);
                         event_ring.push(trb);
                         Poll::Pending
                     }
