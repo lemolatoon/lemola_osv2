@@ -31,11 +31,11 @@ pub fn configure_msi_fixed_destination(
     apic_id: u8,
     trigger_mode: MSITriggerMode,
     delivery_mode: MSIDeliveryMode,
-    interrup_vector: InterruptVector,
+    interrupt_vector: InterruptVector,
     num_vector_exponent: usize,
 ) {
-    let msg_addr = 0xfee00000 | ((apic_id as u32) << 12);
-    let mut msg_data = ((delivery_mode as u32) << 8) | interrup_vector as u32;
+    let msg_addr = 0xfee0_0000 | ((apic_id as u32) << 12);
+    let mut msg_data = ((delivery_mode as u32) << 8) | interrupt_vector as u32;
     if let MSITriggerMode::Level = trigger_mode {
         msg_data |= 0xc000;
     }
@@ -66,6 +66,7 @@ pub fn configure_msi(
         msi_cap.set_message_address(msg_addr as u64);
         msi_cap.set_message_data(msg_data as u16);
 
+        log::debug!("MSI capability updated@0x{:x}\n{:x?}", cap_addr, &msi_cap);
         write_msi_capability(pci_device, cap_addr, msi_cap);
         written = true;
     }
@@ -76,15 +77,24 @@ pub fn configure_msi(
 }
 
 pub fn write_msi_capability(device: &PciDevice, cap_addr: u8, msi_cap: MsiCapability) {
-    device.write_conf_reg(cap_addr, msi_cap.message_control().data() as u32);
+    device.write_conf_reg(cap_addr, msi_cap.header());
     device.write_conf_reg(cap_addr + 4, msi_cap.message_address() as u32);
 
-    let msg_data_addr = cap_addr + 8;
+    let mut msg_data_addr = cap_addr + 8;
+    if msi_cap.message_control().address_64_bit_capable() {
+        device.write_conf_reg(
+            cap_addr + 8,
+            msi_cap.message_address().get_bits(32..64) as u32,
+        );
+        msg_data_addr = cap_addr + 12;
+    }
+
+    device.write_conf_reg(msg_data_addr, msi_cap.message_data() as u32);
+
     if msi_cap.message_control().per_vector_masking() {
         device.write_conf_reg(msg_data_addr + 4, msi_cap.mask_bits());
         device.write_conf_reg(msg_data_addr + 8, msi_cap.pending_bits());
     }
-    todo!()
 }
 
 // https://wiki.osdev.org/PCI#Enabling_MSI
@@ -215,6 +225,10 @@ impl MsiCapability {
 
     pub fn write_at(&self, cap_addr: u8) {
         unsafe { (cap_addr as *mut [u32; 6]).write_volatile(self.0) }
+    }
+
+    pub fn header(&self) -> u32 {
+        self.0[0]
     }
 
     pub fn message_control(&self) -> MessageControl {
