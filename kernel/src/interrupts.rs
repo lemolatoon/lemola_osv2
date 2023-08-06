@@ -14,13 +14,17 @@ pub enum InterruptVector {
 }
 
 fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_code: Option<u64>) {
-    log::info!("xhci interrupt handler called");
-    log::info!("can lock xhc: {}", XHC.try_lock().is_some());
-    let mut xhc = XHC.lock();
-    if let Some(xhc) = xhc.get_mut() {
-        xhc.process_event();
-    }
-    log::info!("end xhci interrupt handler called");
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        log::info!("xhci interrupt handler called");
+        log::info!("can lock xhc: {}", XHC.try_lock().is_some());
+        let mut xhc = XHC.lock();
+        if let Some(xhc) = xhc.get_mut() {
+            while xhc.pending_event() {
+                xhc.process_event();
+            }
+        }
+        log::info!("end xhci interrupt handler called");
+    });
 }
 
 fn general_handler(stack_frame: InterruptStackFrame, index: u8, error_code: Option<u64>) {

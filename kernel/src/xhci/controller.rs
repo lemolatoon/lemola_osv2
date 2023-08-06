@@ -135,7 +135,7 @@ where
         // enable interrupt for the primary interrupter
         let mut primary_interrupter = registers.interrupter_register_set.interrupter_mut(0);
         primary_interrupter.imod.update_volatile(|imodi| {
-            imodi.set_interrupt_moderation_interval(4000);
+            imodi.set_interrupt_moderation_interval(0);
         });
         primary_interrupter
             .iman
@@ -174,6 +174,25 @@ where
         log::debug!("[XHCI] xhc controller starts running!!");
     }
 
+    pub fn pending_event(&self) -> bool {
+        let mut registers = self.registers.lock();
+        let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
+        let event_ring_trb = unsafe {
+            (primary_interrupter
+                .erdp
+                .read_volatile()
+                .event_ring_dequeue_pointer() as *const trb::Link)
+                .read_volatile()
+        };
+        let mut event_ring = self.event_ring.lock();
+        if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
+            // EventRing does not have front
+            return false;
+        }
+
+        true
+    }
+
     pub fn process_event(&mut self) {
         let mut registers = self.registers.lock();
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
@@ -195,9 +214,10 @@ where
             }
             return;
         }
-        log::debug!("[XHCI] EventRing received trb: {:?}", event_ring_trb);
+        log::debug!("[XHCI] EventRing received");
         let primary_interrupter = primary_interrupter;
         let popped = event_ring.pop(primary_interrupter);
+        log::debug!("popped: {:x?}", popped);
         drop(registers);
         drop(event_ring);
         let _trb = match popped {
@@ -317,7 +337,8 @@ where
             registers.doorbell.update_volatile_at(0, |doorbell| {
                 doorbell.set_doorbell_target(0);
                 doorbell.set_doorbell_stream_id(0);
-            })
+            });
+            log::debug!("end enable slot at");
         }
     }
 
