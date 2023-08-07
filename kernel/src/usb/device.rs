@@ -292,6 +292,11 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 //  self.device_manager.device_host_by_slot_id_mut(slot_id);
                 //    let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
                 //    transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
+                let ep =  class_drivers.mouse().1.endpoints_mut(address)[0].as_mut().unwrap();
+                // &mut Endpoint
+                self.init_transfer_ring_for_interrupt_at(ep, &endpoint_descriptor.as_ref().unwrap()).await.unwrap();
+                let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
+                transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);

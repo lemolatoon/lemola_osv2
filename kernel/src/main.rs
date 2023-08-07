@@ -52,12 +52,12 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     x86_64::instructions::interrupts::enable();
 
     loop {
-        count += 1;
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let mut controller = XHC.lock();
-            let controller = controller.get_mut().unwrap();
-            controller.tick_mouse(count).unwrap();
-        });
+        // count += 1;
+        // x86_64::instructions::interrupts::without_interrupts(|| {
+        //     let mut controller = XHC.lock();
+        //     let controller = controller.get_mut().unwrap();
+        //     controller.tick_mouse(count).unwrap();
+        // });
     }
 }
 

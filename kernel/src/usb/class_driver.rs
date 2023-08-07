@@ -126,6 +126,16 @@ where
     pub fn call_callback_at(&mut self, address: u8, buffer: &[u8]) {
         (self.callback)(address, buffer)
     }
+
+    pub fn endpoints_mut(&mut self, address: u8) -> &mut [Option<Endpoint>; MAX_ENDPOINTS] {
+        let device = self.devices
+            .iter_mut()
+            .find(|d| d.as_ref().map_or(false, |dd| dd.addr == address))
+            .unwrap()
+            .as_mut()
+            .unwrap();
+        &mut device.endpoints
+    }
 }
 
 impl<
@@ -635,6 +645,10 @@ impl<
         }
 
         Ok(())
+    }
+
+    pub fn endpoints(&self) -> &[Option<Endpoint>] {
+        &self.endpoints
     }
 }
 
