@@ -22,6 +22,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
+        class_driver::mouse,
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
         traits::AsyncUSBHost,
@@ -278,6 +279,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 //     .unwrap();
             }
             if let Some(_mouse_interface) = mouse_interface {
+                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
                 let address = self.device_address();
                 class_drivers
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
@@ -287,6 +289,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                     .1
                     .tick_until_running_state(self)
                     .unwrap();
+                //  self.device_manager.device_host_by_slot_id_mut(slot_id);
+                //    let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
+                //    transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
@@ -419,36 +424,13 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         Ok(w_length as usize - trb.trb_transfer_length() as usize)
     }
 
-    async fn async_in_transfer(
+    async fn init_transfer_ring_for_interrupt_at(
         &mut self,
         ep: &mut (dyn usb_host::Endpoint + Send + Sync),
-        buf: &mut [u8],
-    ) -> Result<usize, usb_host::TransferError> {
+        endpoint_descriptor: &EndpointDescriptor,
+    ) -> Result<bool, usb_host::TransferError> {
         use xhci::context::InputHandler;
-        if self.descriptors.is_none() {
-            self.request_config_descriptor_and_rest().await;
-        }
-        let endpoint_descriptor = self
-            .descriptors
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter_map(|descriptor| {
-                if let Descriptor::Endpoint(endpoint_descriptor) = descriptor {
-                    if endpoint_descriptor.b_endpoint_address & 0x7f == ep.endpoint_num() {
-                        Some(*endpoint_descriptor)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .next()
-            .ok_or(usb_host::TransferError::Permanent(
-                "Endpoint Descriptor Not Found",
-            ))?;
-        let dci = DeviceContextIndex::from(&endpoint_descriptor);
+        let dci = DeviceContextIndex::from(endpoint_descriptor);
         let portsc = {
             let registers = self.registers.lock();
             registers
@@ -529,7 +511,49 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                     return Err(usb_host::TransferError::Retry("CompletionCode error"));
                 }
             };
+
+            return Ok(true);
         }
+
+        Ok(false)
+    }
+
+    async fn async_in_transfer(
+        &mut self,
+        ep: &mut (dyn usb_host::Endpoint + Send + Sync),
+        buf: &mut [u8],
+    ) -> Result<usize, usb_host::TransferError> {
+        use xhci::context::InputHandler;
+        if self.descriptors.is_none() {
+            self.request_config_descriptor_and_rest().await;
+        }
+        let endpoint_descriptor = self
+            .descriptors
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|descriptor| {
+                if let Descriptor::Endpoint(endpoint_descriptor) = descriptor {
+                    if endpoint_descriptor.b_endpoint_address & 0x7f == ep.endpoint_num() {
+                        Some(*endpoint_descriptor)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .next()
+            .ok_or(usb_host::TransferError::Permanent(
+                "Endpoint Descriptor Not Found",
+            ))?;
+        let dci = DeviceContextIndex::from(&endpoint_descriptor);
+        assert!(matches!(
+            ep.transfer_type(),
+            usb_host::TransferType::Interrupt
+        ));
+        self.init_transfer_ring_for_interrupt_at(ep, &endpoint_descriptor)
+            .await?;
 
         let event_ring = Arc::clone(&self.event_ring);
         let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();

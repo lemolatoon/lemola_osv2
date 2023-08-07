@@ -51,6 +51,27 @@ impl TransferRing<&'static GlobalAllocator> {
             .unwrap()
     }
 
+    pub fn fill_with_normal(&mut self, buf_size: usize) {
+        for idx in 0..(self.buffer_len() - 1) {
+            self.dump_state();
+            let mut normal = transfer::Normal::new();
+            let buf = alloc::vec![0u8; buf_size];
+            normal
+                .set_data_buffer_pointer(buf.as_ptr() as u64)
+                .set_trb_transfer_length(buf.len() as u32)
+                .set_td_size(0)
+                .set_interrupt_on_completion()
+                .set_interrupt_on_short_packet()
+                .set_interrupter_target(0);
+            self.push(transfer::Allowed::Normal(normal));
+        }
+    }
+
+    pub fn buffer_range(&self) -> core::ops::Range<usize> {
+        let base_ptr = self.buffer_ptr() as *const TrbRaw as usize;
+        base_ptr..(base_ptr + self.buffer_len())
+    }
+
     pub fn cycle_bit(&self) -> bool {
         self.cycle_bit
     }

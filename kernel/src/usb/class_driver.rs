@@ -122,6 +122,10 @@ where
         }
         Ok(())
     }
+
+    pub fn call_callback_at(&mut self, address: u8, buffer: &[u8]) {
+        (self.callback)(address, buffer)
+    }
 }
 
 impl<
