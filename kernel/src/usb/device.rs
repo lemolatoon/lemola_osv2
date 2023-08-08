@@ -212,10 +212,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         endpoint0_context.set_error_count(3);
     }
 
-    pub async fn start_initialization<MF, KF>(
-        &mut self,
-        class_drivers: &mut ClassDriverManager<MF, KF>,
-    ) where
+    pub async fn start_initialization<MF, KF>(&mut self, class_drivers: &ClassDriverManager<MF, KF>)
+    where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
     {
@@ -284,12 +282,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 class_drivers
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-                class_drivers
-                    .mouse()
-                    .1
-                    .tick_until_running_state(self)
-                    .unwrap();
-
+                let mut driver_info = class_drivers.mouse().lock();
+                driver_info.driver.tick_until_running_state(self).unwrap();
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
@@ -844,7 +838,9 @@ impl usb_host::Endpoint for EndpointId {
     }
 }
 
-impl<M: Mapper + Clone + Send + Sync> usb_host::USBHost for DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> usb_host::USBHost
+    for DeviceContextInfo<M, &'static GlobalAllocator>
+{
     fn control_transfer(
         &mut self,
         ep: &mut dyn usb_host::Endpoint,

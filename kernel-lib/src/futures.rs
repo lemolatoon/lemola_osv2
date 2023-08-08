@@ -18,7 +18,6 @@ macro_rules! await_sync {
     }};
 }
 
-
 #[macro_export]
 macro_rules! await_once_noblocking {
     ($e:expr) => {{

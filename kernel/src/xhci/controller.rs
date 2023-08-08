@@ -16,7 +16,7 @@ use crate::{
     memory::PAGE_SIZE,
     usb::{
         class_driver::ClassDriverManager,
-        device::{DeviceContextIndex, InputContextWrapper, DeviceContextInfo},
+        device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
     },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
@@ -40,7 +40,7 @@ where
     command_ring: Arc<Mutex<CommandRing>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     number_of_ports: u8,
-    port_configure_state: PortConfigureState,
+    port_configure_state: Mutex<PortConfigureState>,
     class_driver_manager: ClassDriverManager<MF, KF>,
 }
 
@@ -149,7 +149,7 @@ where
             usbcmd.set_interrupter_enable();
         });
 
-        let port_configure_state = PortConfigureState::new();
+        let port_configure_state = Mutex::new(PortConfigureState::new());
 
         drop(registers);
         Self {
@@ -163,7 +163,7 @@ where
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&self) {
         let mut registers = self.registers.lock();
         let operational = &mut registers.operational;
         operational.usbcmd.update_volatile(|usbcmd| {
@@ -184,7 +184,7 @@ where
                 .event_ring_dequeue_pointer() as *const trb::Link)
                 .read_volatile()
         };
-        let mut event_ring = self.event_ring.lock();
+        let event_ring = self.event_ring.lock();
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
             return false;
@@ -193,7 +193,11 @@ where
         true
     }
 
-    pub async fn process_event(&mut self) {
+    pub async fn process_event<MFF, KFF>(&self, class_driver_manager: &ClassDriverManager<MFF, KFF>)
+    where 
+    MFF: Fn(u8, &[u8]),
+    KFF: Fn(u8, &[u8]),
+     {
         let mut registers = self.registers.lock();
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
@@ -209,7 +213,7 @@ where
             if let Some(trb) = event_ring.pop_already_popped() {
                 drop(event_ring);
                 drop(registers);
-                self.process_event_ring_event(trb).await;
+                self.process_event_ring_event(trb, class_driver_manager).await;
                 return;
             }
             return;
@@ -222,7 +226,7 @@ where
         drop(event_ring);
         let _trb = match popped {
             Ok(event_trb) => {
-                self.process_event_ring_event(event_trb).await;
+                self.process_event_ring_event(event_trb, class_driver_manager).await;
                 return;
             }
             Err(raw) => raw,
@@ -231,13 +235,19 @@ where
         todo!()
     }
 
-    pub async fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
+    pub async fn process_event_ring_event<MFF, KFF>(&self, event_trb: event::Allowed, class_driver_manager: &ClassDriverManager<MFF, KFF>)
+    
+    where
+    MFF: Fn(u8,  &[u8]),
+    KFF: Fn(u8,  &[u8]),
+    {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
                 self.process_transfer_event(transfer_event);
             }
             event::Allowed::CommandCompletion(command_completion) => {
-                self.process_command_completion_event(command_completion).await;
+                self.process_command_completion_event(command_completion, class_driver_manager)
+                    .await;
             }
             event::Allowed::PortStatusChange(port_status_change) => {
                 self.process_port_status_change_event(port_status_change)
@@ -258,28 +268,31 @@ where
         self.registers.lock()
     }
 
-    pub fn configure_port_at(&mut self, port_idx: usize) {
+    pub fn configure_port_at(&self, port_idx: usize) {
         log::debug!("configure port at: {}", port_idx);
-        if !self.port_configure_state.is_connected(port_idx) {
+
+        let port_configure_state = self.port_configure_state.lock();
+        if !port_configure_state.is_connected(port_idx) {
             self.reset_port_at(port_idx);
         }
     }
 
-    pub fn reset_port_at(&mut self, port_idx: usize) {
+    pub fn reset_port_at(&self, port_idx: usize) {
         log::debug!("reset port at: {}", port_idx);
         let is_connected = self.is_port_connected_at(port_idx);
         if !is_connected {
             return;
         }
 
-        match self.port_configure_state.addressing_port_index {
+        let mut port_configure_state = self.port_configure_state.lock();
+        match port_configure_state.addressing_port_index {
             Some(_) => {
                 // This branch is fallen, when another port is currently trying to be configured
-                self.port_configure_state.port_config_phase[port_idx] =
+                port_configure_state.port_config_phase[port_idx] =
                     PortConfigPhase::WaitingAddressed;
             }
             None => {
-                let port_phase = self.port_configure_state.port_phase_at(port_idx);
+                let port_phase = port_configure_state.port_phase_at(port_idx);
                 if !matches!(
                     port_phase,
                     PortConfigPhase::NotConnected | PortConfigPhase::WaitingAddressed
@@ -287,7 +300,7 @@ where
                     panic!("INVALID PortConfigPhase state.");
                 }
 
-                self.port_configure_state.start_configuration_at(port_idx);
+                port_configure_state.start_configuration_at(port_idx);
                 log::debug!(
                     "start clear connect status change and port reset port at: {}",
                     port_idx
@@ -309,7 +322,7 @@ where
         }
     }
 
-    pub fn enable_slot_at(&mut self, port_idx: usize) {
+    pub fn enable_slot_at(&self, port_idx: usize) {
         let mut registers = self.registers.lock();
         let port_register_sets = &mut registers.port_register_set;
         let port_reg_set = port_register_sets.read_volatile_at(port_idx);
@@ -329,7 +342,8 @@ where
                 port_reg_set.portsc.set_0_port_reset_change();
             });
 
-            self.port_configure_state.port_config_phase[port_idx] = PortConfigPhase::EnablingSlot;
+            let mut port_configure_state = self.port_configure_state.lock();
+            port_configure_state.port_config_phase[port_idx] = PortConfigPhase::EnablingSlot;
 
             let enable_slot_cmd =
                 trb::command::Allowed::EnableSlot(trb::command::EnableSlot::new());
@@ -342,7 +356,7 @@ where
         }
     }
 
-    fn address_device_at(&mut self, port_index: usize, slot_id: usize) {
+    fn address_device_at(&self, port_index: usize, slot_id: usize) {
         log::debug!(
             "address device at: port_index: {}, slot_id: {}",
             port_index,
@@ -371,7 +385,8 @@ where
                 .transfer_ring_at(ep0_dci)
                 .as_ref()
                 .unwrap()
-                .buffer_ptr() as *const TrbRaw as u64;
+                .buffer_ptr() as *const TrbRaw
+                as u64;
             log::debug!(
                 "transfer ring dequeue pointer: {:#x}",
                 transfer_ring_dequeue_pointer
@@ -384,22 +399,22 @@ where
         }
 
         self.device_manager.load_device_context(slot_id);
-        let input_context_pointer = 
-            {
-                let mut device = device.lock();
-                let device = device.as_mut().unwrap();
+        let input_context_pointer = {
+            let mut device = device.lock();
+            let device = device.as_mut().unwrap();
 
-                let slot_context = device.slot_context();
-                log::debug!("slot context: {:x?}", slot_context.as_ref());
-                log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
-                let endpoint0_context = device.endpoint_context(ep0_dci);
-                log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
-                log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
+            let slot_context = device.slot_context();
+            log::debug!("slot context: {:x?}", slot_context.as_ref());
+            log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
+            let endpoint0_context = device.endpoint_context(ep0_dci);
+            log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
+            log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
 
-                self.port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
+            let mut port_configure_state = self.port_configure_state.lock();
+            port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
 
-                &*device.input_context as *const InputContextWrapper as u64
-            };
+            &*device.input_context as *const InputContextWrapper as u64
+        };
         let mut address_device_command = trb::command::AddressDevice::new();
         let slot_context_pointer = (input_context_pointer + 32) as *const Slot64Byte;
         let ep0_context_pointer = (input_context_pointer + 64) as *const Endpoint64Byte;
@@ -425,7 +440,17 @@ where
         })
     }
 
-    pub async fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
+    pub async fn initialize_device_at<MFF, KFF>(
+        &self,
+        port_idx: u8,
+        slot_id: u8,
+        class_driver_manager: &ClassDriverManager<MFF, KFF>,
+    )
+    
+    where 
+        MFF: Fn(u8, &[u8]),
+        KFF: Fn(u8, &[u8])
+     {
         log::debug!(
             "initialize device at: port_id: {}, slot_id: {}",
             port_idx + 1,
@@ -438,11 +463,11 @@ where
             log::error!("device not found for slot_id: {}", slot_id);
             panic!("Invalid slot_id!");
         };
-        self.port_configure_state
+        let mut port_configure_state = self.port_configure_state.lock();
+        port_configure_state
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
 
-        let class_drivers = &mut self.class_driver_manager;
-        device.start_initialization(class_drivers).await;
+        device.start_initialization(class_driver_manager).await;
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
@@ -460,10 +485,6 @@ where
             .read_volatile_at(port_index)
             .portsc
             .current_connect_status()
-    }
-
-    pub fn class_driver_manager_mut(&mut self) -> &mut ClassDriverManager<MF, KF> {
-        &mut self.class_driver_manager
     }
 
     fn reset_controller(registers: &mut xhci::Registers<M>) {
@@ -541,7 +562,7 @@ where
         }
 
         let ptr_head = device_manager.get_device_contexts_head_ptr();
-        log::debug!("DeviceContextBaseAddressArrayPointer: {0:p}", ptr_head);
+        log::debug!("DeviceContextBaseAddressArrayPointer: 0x{:x}", ptr_head);
         operational.dcbaap.update_volatile(|dcbaap| {
             dcbaap.set(device_manager.get_device_contexts_head_ptr() as u64)
         });
@@ -591,7 +612,10 @@ where
         log::debug!("OS has owned xHC!!");
     }
 
-    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
+    pub fn usb_device_host_at(
+        &mut self,
+        slot_id: usize,
+    ) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
         self.device_manager.device_by_slot_id(slot_id)
     }
 }
@@ -604,11 +628,12 @@ where
 {
     // process events
 
-    fn process_port_status_change_event(&mut self, event: trb::event::PortStatusChange) {
+    fn process_port_status_change_event(&self, event: trb::event::PortStatusChange) {
         log::debug!("PortStatusChangeEvent: port_id: {}", event.port_id());
         let port_idx = event.port_id() as usize - 1;
 
-        match self.port_configure_state.port_phase_at(port_idx) {
+        let port_configure_state = self.port_configure_state.lock();
+        match port_configure_state.port_phase_at(port_idx) {
             PortConfigPhase::NotConnected => self.reset_port_at(port_idx),
             PortConfigPhase::ResettingPort => {
                 // already called reset_port_at once
@@ -622,7 +647,12 @@ where
         }
     }
 
-    async fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
+    async fn process_command_completion_event<MFF, KFF>(&self, event: trb::event::CommandCompletion, class_driver_manager: &ClassDriverManager<MFF, KFF>) 
+    
+    where 
+        MFF: Fn(u8, &[u8]),
+        KFF: Fn(u8, &[u8]),
+    {
         let slot_id = event.slot_id();
         let Ok(completion_code) = event.completion_code() else {
             log::error!(
@@ -663,11 +693,12 @@ where
         match command_trb {
             trb::command::Allowed::Link(_) => todo!(),
             trb::command::Allowed::EnableSlot(_enable_slot) => {
-                let Some(addressing_port_phase) = self.port_configure_state.addressing_port_phase()
+                let port_configure_state = self.port_configure_state.lock();
+                let Some(addressing_port_phase) = port_configure_state.addressing_port_phase()
                 else {
                     log::error!(
                         "No addressing port: {:?}",
-                        self.port_configure_state.addressing_port_index
+                        port_configure_state.addressing_port_index
                     );
                     panic!("InvalidPhase");
                 };
@@ -676,50 +707,54 @@ where
                     panic!("InvalidPhase")
                 }
 
-                let addressing_port_idx = self.port_configure_state.addressing_port_index.unwrap();
+                let addressing_port_idx = port_configure_state.addressing_port_index.unwrap();
                 self.address_device_at(addressing_port_idx, slot_id as usize);
             }
             trb::command::Allowed::DisableSlot(_) => todo!(),
             trb::command::Allowed::AddressDevice(_address_device) => {
-                let device = self.device_manager.device_by_slot_id(slot_id as usize);
-                let mut device = device.lock();
-                let Some(device) = device.as_mut() else {
-                    log::error!("InvalidSlotId: {}", slot_id);
-                    panic!("InvalidSlotId")
+                let port_index = {
+                    let device = self.device_manager.device_by_slot_id(slot_id as usize);
+                    let mut device = device.lock();
+                    let Some(device) = device.as_mut() else {
+                        log::error!("InvalidSlotId: {}", slot_id);
+                        panic!("InvalidSlotId")
+                    };
+
+                    let port_index = device.slot_context().root_hub_port_number() - 1;
+
+                    let mut port_configure_state = self.port_configure_state.lock();
+                    if port_configure_state.addressing_port_index != Some(port_index as usize) {
+                        log::error!(
+                            "InvalidPhase:\naddressing: {:?}, received: {}",
+                            port_configure_state.addressing_port(),
+                            port_index
+                        );
+                        panic!("InvalidPhase")
+                    }
+
+                    if port_configure_state.addressing_port_phase()
+                        != Some(PortConfigPhase::AddressingDevice)
+                    {
+                        log::error!(
+                            "InvalidPhase: {:?}",
+                            port_configure_state.addressing_port_phase()
+                        );
+                        panic!("InvalidPhase")
+                    }
+
+                    port_configure_state.clear_addressing_port_index();
+                    for port_idx in 0..port_configure_state.len() {
+                        if port_configure_state.port_phase_at(port_idx)
+                            == PortConfigPhase::WaitingAddressed
+                        {
+                            self.reset_port_at(port_idx);
+                            break;
+                        }
+                    }
+                    port_index
                 };
 
-                let port_index = device.slot_context().root_hub_port_number() - 1;
-
-                if self.port_configure_state.addressing_port_index != Some(port_index as usize) {
-                    log::error!(
-                        "InvalidPhase:\naddressing: {:?}, received: {}",
-                        self.port_configure_state.addressing_port(),
-                        port_index
-                    );
-                    panic!("InvalidPhase")
-                }
-
-                if self.port_configure_state.addressing_port_phase()
-                    != Some(PortConfigPhase::AddressingDevice)
-                {
-                    log::error!(
-                        "InvalidPhase: {:?}",
-                        self.port_configure_state.addressing_port_phase()
-                    );
-                    panic!("InvalidPhase")
-                }
-
-                self.port_configure_state.clear_addressing_port_index();
-                for port_idx in 0..self.port_configure_state.len() {
-                    if self.port_configure_state.port_phase_at(port_idx)
-                        == PortConfigPhase::WaitingAddressed
-                    {
-                        self.reset_port_at(port_idx);
-                        break;
-                    }
-                }
-
-                self.initialize_device_at(port_index, slot_id).await;
+                self.initialize_device_at(port_index, slot_id, class_driver_manager).await;
             }
             trb::command::Allowed::ConfigureEndpoint(_) => {
                 let mut event_ring = self.event_ring.lock();
@@ -741,7 +776,7 @@ where
         }
     }
 
-    fn process_transfer_event(&mut self, event: trb::event::TransferEvent) {
+    fn process_transfer_event(&self, event: trb::event::TransferEvent) {
         log::debug!("TransferEvent received: {:?}", &event);
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
@@ -766,13 +801,11 @@ where
         let slot_id = event.slot_id();
         let dci = event.endpoint_id();
 
-        let device = self
-            .device_manager
-            .device_by_slot_id(slot_id as usize);
+        let device = self.device_manager.device_by_slot_id(slot_id as usize);
         let mut device = device.lock();
         let device = device.as_mut().unwrap();
 
-        let trb_pointer = event.trb_pointer() as *mut TrbRaw;
+        let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
         let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
         if let transfer::Allowed::Normal(_normal) = trb {
             // let transfer_ring = device
@@ -798,11 +831,15 @@ macro_rules! gen_tick {
     ($fname:ident, $device:ident) => {
         pub fn $fname(&mut self, count: usize) -> Result<(), usb_host::DriverError> {
             use usb_host::Driver;
-            if let Some(slot_id) = self.class_driver_manager.$device().0 {
+            let mut driver = self.class_driver_manager.$device().lock();
+            if let Some(slot_id) = driver.slot_id {
                 let device = self.device_manager.device_by_slot_id(slot_id);
+                drop(driver);
                 let mut device = device.lock();
                 if let Some(host) = device.as_mut() {
-                    self.class_driver_manager.$device().1.tick(count, host)?;
+                    let mut driver = self.class_driver_manager.$device().lock();
+
+                    driver.driver.tick(count, host)?;
                 }
             }
 
@@ -815,11 +852,19 @@ macro_rules! gen_async_tick {
     ($fname:ident, $device:ident) => {
         pub async fn $fname(&mut self, count: usize) -> Result<(), usb_host::DriverError> {
             use crate::usb::traits::AsyncDriver;
-            if let Some(slot_id) = self.class_driver_manager.$device().0 {
+            let driver = self.class_driver_manager.$device();
+            let mut driver = driver.lock();
+            if let Some(slot_id) = driver.slot_id {
                 let device = self.device_manager.device_by_slot_id(slot_id);
+                drop(driver);
                 let mut device = device.lock();
                 if let Some(host) = device.as_mut() {
-                    self.class_driver_manager.$device().1.tick(count, host).await?;
+                    let driver = self.class_driver_manager.$device();
+                    let mut driver = driver.lock();
+                    driver
+                        .driver
+                        .tick(count, host)
+                        .await?;
                 }
             }
 

@@ -1,7 +1,11 @@
 extern crate alloc;
 
-use core::{future::Future, pin::Pin, task::{Context, Poll}};
 use alloc::boxed::Box;
+use core::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
 #[repr(u8)]
@@ -10,17 +14,16 @@ pub enum Priority {
     Default = 10,
 }
 
-
 pub struct Task {
     priority: Priority,
-    future: Pin<Box<dyn Future<Output = ()>>>
+    future: Pin<Box<dyn Future<Output = ()>>>,
 }
 
 impl Task {
     pub fn new(priority: Priority, future: impl Future<Output = ()> + 'static) -> Self {
         Self {
             priority,
-            future: Box::pin(future)
+            future: Box::pin(future),
         }
     }
 
@@ -34,7 +37,6 @@ impl core::cmp::Ord for Task {
         // Notice that we are reversing the order here
         other.priority.cmp(&self.priority)
     }
-
 }
 
 impl core::cmp::PartialOrd for Task {
@@ -44,7 +46,6 @@ impl core::cmp::PartialOrd for Task {
 }
 
 impl core::cmp::Eq for Task {}
-
 
 impl core::cmp::PartialEq for Task {
     fn eq(&self, other: &Self) -> bool {

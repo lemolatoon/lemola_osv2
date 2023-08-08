@@ -11,9 +11,13 @@ use kernel::{
     graphics::{init_graphics, init_logger},
     interrupts::init_idt,
     memory::MemoryMapper,
+    multitasking::{
+        executor::Executor,
+        task::{Priority, Task},
+    },
     println, serial_println,
     usb::device::DeviceContextInfo,
-    xhci::{init_xhci_controller, XHC}, multitasking::{executor::Executor, task::{Task, Priority}},
+    xhci::{init_xhci_controller, XHC},
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 

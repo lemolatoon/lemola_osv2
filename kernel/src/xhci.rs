@@ -7,7 +7,7 @@ use crate::{
     interrupts::InterruptVector,
     memory::MemoryMapper,
     pci, serial_println,
-    usb::class_driver::callbacks::{self, CallbackType},
+    usb::class_driver::{callbacks::{self, CallbackType}, ClassDriverManager},
 };
 
 use self::controller::XhciController;
@@ -30,10 +30,14 @@ pub fn read_local_apic_id(offset: usize) -> u8 {
 }
 
 pub fn write_local_apic_id(offset: usize, data: u32) {
-    unsafe { ((LOCAL_APIC_ADDRESS + offset )as *mut u32).write_volatile(data) };
+    unsafe { ((LOCAL_APIC_ADDRESS + offset) as *mut u32).write_volatile(data) };
 }
 
-pub async fn poll_forever() {
+pub async fn poll_forever<MF, KF>(class_driver_manager: &ClassDriverManager<MF, KF>)
+where
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+ {
     loop {
         // for avoiding deadlock
         // x86_64::instructions::interrupts::disable();
@@ -42,7 +46,7 @@ pub async fn poll_forever() {
             if let Some(mut xhc) = XHC.try_lock() {
                 if let Some(xhc) = xhc.get_mut() {
                     while xhc.pending_event() {
-                        xhc.process_event().await;
+                        xhc.process_event(class_driver_manager).await;
                     }
                 }
             }
@@ -64,7 +68,7 @@ pub async fn tick_mouse_forever() {
                 }
             }
         }
-        count+= 1;
+        count += 1;
         // x86_64::instructions::interrupts::enable();
     }
 }
