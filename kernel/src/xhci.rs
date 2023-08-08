@@ -24,15 +24,6 @@ pub static XHC: Mutex<
     OnceCell<XhciController<MemoryMapper, &'static GlobalAllocator, CallbackType, CallbackType>>,
 > = Mutex::new(OnceCell::new());
 
-const LOCAL_APIC_ADDRESS: usize = 0xfee0_0000;
-pub fn read_local_apic_id(offset: usize) -> u8 {
-    unsafe { ((LOCAL_APIC_ADDRESS + offset) as *mut u32).read_volatile() as u8 }
-}
-
-pub fn write_local_apic_id(offset: usize, data: u32) {
-    unsafe { ((LOCAL_APIC_ADDRESS + offset )as *mut u32).write_volatile(data) };
-}
-
 pub fn init_xhci_controller() {
     let devices = crate::pci::register::scan_all_bus();
     for device in &devices {

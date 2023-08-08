@@ -49,25 +49,14 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     // FIXME: this comment outted code causes infinite exception loop
     // unsafe { asm!("ud2") };
 
-
-    // {
-    //     let mut controller = XHC.lock();
-    //     if let Some(xhc) = controller.get_mut() {
-    //         while xhc.pending_event() {
-    //             xhc.process_event();
-    //         }
-    //     }
-    //     let controller = controller.get_mut().unwrap();
-    //     controller.tick_mouse(count).unwrap();
-    // }
-    // log::debug!("sti");
     x86_64::instructions::interrupts::enable();
+
     loop {
         // count += 1;
-        // // x86_64::instructions::interrupts::without_interrupts(|| {
-        // let mut controller = XHC.lock();
-        // let controller = controller.get_mut().unwrap();
-        // controller.tick_mouse(count).unwrap();
+        // x86_64::instructions::interrupts::without_interrupts(|| {
+        //     let mut controller = XHC.lock();
+        //     let controller = controller.get_mut().unwrap();
+        //     controller.tick_mouse(count).unwrap();
         // });
     }
 }

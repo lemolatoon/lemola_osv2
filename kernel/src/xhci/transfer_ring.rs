@@ -52,15 +52,13 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn fill_with_normal(&mut self, buf_size: usize) {
-        for _idx in 0..(self.buffer_len() - 1) {
+        for idx in 0..(self.buffer_len() - 1) {
             self.dump_state();
             let mut normal = transfer::Normal::new();
-            let layout = core::alloc::Layout::from_size_align(buf_size, 64).unwrap();
-            let buf = unsafe {alloc::alloc::alloc(layout)};
-            assert!(!buf.is_null(), "alloc failed");
+            let buf = alloc::vec![0u8; buf_size];
             normal
-                .set_data_buffer_pointer(buf as u64)
-                .set_trb_transfer_length(buf_size as u32)
+                .set_data_buffer_pointer(buf.as_ptr() as u64)
+                .set_trb_transfer_length(buf.len() as u32)
                 .set_td_size(0)
                 .set_interrupt_on_completion()
                 .set_interrupt_on_short_packet()
@@ -120,6 +118,8 @@ impl TransferRing<&'static GlobalAllocator> {
         {
             transfer::Allowed::Normal(normal) => {
                 let mut data_buffer_pointer = normal.data_buffer_pointer();
+                data_buffer_pointer = ((data_buffer_pointer & 0x0000_0000_ffff_ffff) << 32)
+                    | ((0xffff_ffff_0000_0000 & data_buffer_pointer) >> 32);
                 cmd.set_data_buffer_pointer(data_buffer_pointer);
                 cmd.set_trb_transfer_length(normal.trb_transfer_length());
             }

@@ -194,7 +194,6 @@ where
     }
 
     pub fn process_event(&mut self) {
-        log::debug!("process event!");
         let mut registers = self.registers.lock();
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
