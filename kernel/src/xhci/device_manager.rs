@@ -59,7 +59,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         &mut self,
         port_index: usize,
         slot_id: usize,
-    ) -> &mut DeviceContextInfo<M, &'static GlobalAllocator> {
+    ) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
                 "slot_id is out of range: {} / {}",
@@ -69,7 +69,8 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
             panic!("slot_id is out of range");
         }
 
-        if self.device_context_array.device_context_infos[slot_id].is_some() {
+        let mut device_context_info = self.device_context_array.device_context_infos[slot_id].lock();
+        if device_context_info.is_some() {
             log::error!("device context at {} is already allocated", slot_id);
             panic!("device context at {} is already allocated", slot_id);
         }
@@ -77,50 +78,31 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
         let command_ring = Arc::clone(&self.command_ring);
-        self.device_context_array.device_context_infos[slot_id] = Some(DeviceContextInfo::new(
+        *device_context_info = Some(DeviceContextInfo::new(
             port_index,
             slot_id,
             registers,
             event_ring,
             command_ring,
         ));
-        self.device_context_array.device_context_infos[slot_id]
-            .as_mut()
-            .unwrap()
+        Arc::clone(&self.device_context_array.device_context_infos[slot_id])
     }
 
     pub fn device_by_slot_id(
         &self,
         slot_id: usize,
-    ) -> Option<&DeviceContextInfo<M, &'static GlobalAllocator>> {
-        self.device_context_array.device_context_infos[slot_id].as_ref()
+    ) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
+        Arc::clone(&self.device_context_array.device_context_infos[slot_id])
     }
 
-    pub fn device_by_slot_id_mut(
-        &mut self,
-        slot_id: usize,
-    ) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
-        self.device_context_array.device_context_infos[slot_id].as_mut()
-    }
-
-    pub fn device_host_by_slot_id_mut(
-        &mut self,
-        slot_id: usize,
-    ) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
-        if let Some(host) = self.device_context_array.device_context_infos[slot_id].as_mut() {
-            return Some(host);
-        }
-        None
-    }
 
     pub fn load_device_context(&mut self, slot_id: usize) {
         if slot_id > self.device_context_array.max_slots() {
             log::error!("Invalid slot_id: {}", slot_id);
             panic!("Invalid slot_id: {}", slot_id);
         }
-        let device_context_info = self.device_context_array.device_context_infos[slot_id]
-            .as_mut()
-            .unwrap();
+        let mut device_context_info = self.device_context_array.device_context_infos[slot_id].lock();
+        let device_context_info = device_context_info.as_mut().unwrap();
         self.device_context_array.device_contexts[slot_id] = &*device_context_info.device_context
             as *const DeviceContextWrapper
             as *mut Device32Byte
@@ -131,7 +113,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
 #[derive(Debug)]
 struct DeviceContextArray<M: Mapper + Clone + Send + Sync, A: Allocator> {
     device_contexts: Box<[Device32BytePtr], A>,
-    device_context_infos: Vec<Option<DeviceContextInfo<M, A>>>,
+    device_context_infos: Vec<Arc<Mutex<Option<DeviceContextInfo<M, A>>>>>,
 }
 
 impl<M: Mapper + Clone + Send + Sync> DeviceContextArray<M, &'static GlobalAllocator> {
@@ -148,7 +130,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextArray<M, &'static GlobalAlloc
         )
         .expect("DeviceContextArray allocation failed");
         let mut device_context_infos = Vec::with_capacity(device_contexts_len);
-        device_context_infos.resize_with(device_contexts_len, || None);
+        device_context_infos.resize_with(device_contexts_len, || Arc::new(Mutex::new(None)));
+        let device_context_infos = device_context_infos;
+        {
+            let guard = device_context_infos[0].lock();
+        }
         Self {
             device_contexts,
             device_context_infos,

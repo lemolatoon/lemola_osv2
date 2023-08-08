@@ -350,46 +350,57 @@ where
         );
         let ep0_dci = DeviceContextIndex::ep0();
         let device = self.device_manager.allocate_device(port_index, slot_id);
-        device.enable_slot_context();
-        device.enable_endpoint(ep0_dci);
+        {
+            let mut device = device.lock();
+            let device = device.as_mut().unwrap();
+            device.enable_slot_context();
+            device.enable_endpoint(ep0_dci);
+        }
 
         let mut registers = self.registers.lock();
         let porttsc = registers
             .port_register_set
             .read_volatile_at(port_index)
             .portsc;
-        let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
-        device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
+        {
+            let mut device = device.lock();
+            let device = device.as_mut().unwrap();
+            device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
 
-        let transfer_ring_dequeue_pointer = device
-            .transfer_ring_at(ep0_dci)
-            .as_ref()
-            .unwrap()
-            .buffer_ptr() as *const TrbRaw as u64;
+            let transfer_ring_dequeue_pointer = device
+                .transfer_ring_at(ep0_dci)
+                .as_ref()
+                .unwrap()
+                .buffer_ptr() as *const TrbRaw as u64;
+            log::debug!(
+                "transfer ring dequeue pointer: {:#x}",
+                transfer_ring_dequeue_pointer
+            );
 
-        log::debug!(
-            "transfer ring dequeue pointer: {:#x}",
-            transfer_ring_dequeue_pointer
-        );
-        let slot_context = device.slot_context();
-        let max_packet_size = Self::max_packet_size_for_control_pipe(slot_context.speed());
+            let slot_context = device.slot_context();
+            let max_packet_size = Self::max_packet_size_for_control_pipe(slot_context.speed());
 
-        device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
+            device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
+        }
 
         self.device_manager.load_device_context(slot_id);
-        let device = self.device_manager.device_by_slot_id_mut(slot_id).unwrap();
+        let input_context_pointer = 
+            {
+                let mut device = device.lock();
+                let device = device.as_mut().unwrap();
 
-        let slot_context = device.slot_context();
-        log::debug!("slot context: {:x?}", slot_context.as_ref());
-        log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
-        let endpoint0_context = device.endpoint_context(ep0_dci);
-        log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
-        log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
+                let slot_context = device.slot_context();
+                log::debug!("slot context: {:x?}", slot_context.as_ref());
+                log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
+                let endpoint0_context = device.endpoint_context(ep0_dci);
+                log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
+                log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
 
-        self.port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
+                self.port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
 
+                &*device.input_context as *const InputContextWrapper as u64
+            };
         let mut address_device_command = trb::command::AddressDevice::new();
-        let input_context_pointer = &*device.input_context as *const InputContextWrapper as u64;
         let slot_context_pointer = (input_context_pointer + 32) as *const Slot64Byte;
         let ep0_context_pointer = (input_context_pointer + 64) as *const Endpoint64Byte;
         log::debug!("slot context pointer?: {:p}", slot_context_pointer);
@@ -421,7 +432,9 @@ where
             slot_id
         );
 
-        let Some(device) = self.device_manager.device_by_slot_id_mut(slot_id as usize) else {
+        let device = self.device_manager.device_by_slot_id(slot_id as usize);
+        let mut device = device.lock();
+        let Some(device) = device.as_mut() else {
             log::error!("device not found for slot_id: {}", slot_id);
             panic!("Invalid slot_id!");
         };
@@ -578,8 +591,8 @@ where
         log::debug!("OS has owned xHC!!");
     }
 
-    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
-        self.device_manager.device_host_by_slot_id_mut(slot_id)
+    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
+        self.device_manager.device_by_slot_id(slot_id)
     }
 }
 
@@ -668,7 +681,9 @@ where
             }
             trb::command::Allowed::DisableSlot(_) => todo!(),
             trb::command::Allowed::AddressDevice(_address_device) => {
-                let Some(device) = self.device_manager.device_by_slot_id(slot_id as usize) else {
+                let device = self.device_manager.device_by_slot_id(slot_id as usize);
+                let mut device = device.lock();
+                let Some(device) = device.as_mut() else {
                     log::error!("InvalidSlotId: {}", slot_id);
                     panic!("InvalidSlotId")
                 };
@@ -750,10 +765,13 @@ where
         };
         let slot_id = event.slot_id();
         let dci = event.endpoint_id();
+
         let device = self
             .device_manager
-            .device_by_slot_id_mut(slot_id as usize)
-            .unwrap();
+            .device_by_slot_id(slot_id as usize);
+        let mut device = device.lock();
+        let device = device.as_mut().unwrap();
+
         let trb_pointer = event.trb_pointer() as *mut TrbRaw;
         let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
         if let transfer::Allowed::Normal(_normal) = trb {
@@ -781,7 +799,9 @@ macro_rules! gen_tick {
         pub fn $fname(&mut self, count: usize) -> Result<(), usb_host::DriverError> {
             use usb_host::Driver;
             if let Some(slot_id) = self.class_driver_manager.$device().0 {
-                if let Some(host) = self.device_manager.device_host_by_slot_id_mut(slot_id) {
+                let device = self.device_manager.device_by_slot_id(slot_id);
+                let mut device = device.lock();
+                if let Some(host) = device.as_mut() {
                     self.class_driver_manager.$device().1.tick(count, host)?;
                 }
             }
@@ -796,7 +816,9 @@ macro_rules! gen_async_tick {
         pub async fn $fname(&mut self, count: usize) -> Result<(), usb_host::DriverError> {
             use crate::usb::traits::AsyncDriver;
             if let Some(slot_id) = self.class_driver_manager.$device().0 {
-                if let Some(host) = self.device_manager.device_host_by_slot_id_mut(slot_id) {
+                let device = self.device_manager.device_by_slot_id(slot_id);
+                let mut device = device.lock();
+                if let Some(host) = device.as_mut() {
                     self.class_driver_manager.$device().1.tick(count, host).await?;
                 }
             }
