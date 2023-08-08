@@ -1,3 +1,5 @@
+use core::future::Future;
+
 #[doc(hidden)]
 pub fn dummy_waker() -> core::task::Waker {
     ::dummy_waker::dummy_waker()
@@ -31,6 +33,34 @@ macro_rules! await_once_noblocking {
         }
     }};
 }
+
+pub struct PendingOnceFuture {
+    polled: bool,
+}
+
+impl PendingOnceFuture {
+    pub fn new() -> Self {
+        Self { polled: false }
+    }
+}
+
+impl Future for PendingOnceFuture {
+    type Output = ();
+
+    fn poll(mut self: core::pin::Pin<&mut Self>, _: &mut core::task::Context) -> core::task::Poll<()> {
+        if self.polled {
+            core::task::Poll::Ready(())
+        } else {
+            self.polled = true;
+            core::task::Poll::Pending
+        }
+    }
+}
+
+pub fn yield_pending() -> impl Future<Output = ()> {
+    PendingOnceFuture::new()
+}
+
 
 #[cfg(test)]
 mod tests {

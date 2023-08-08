@@ -6,7 +6,7 @@ use kernel_lib::{
     AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,
 };
 use once_cell::unsync::OnceCell;
-use spin::Mutex;
+use kernel_lib::mutex::Mutex;
 
 use crate::serial_print;
 
@@ -213,7 +213,7 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
             }
         }
     }
-    let writer = WRITER.0.lock();
+    let writer = kernel_lib::lock!(WRITER.0);
     let pixcel_writer =
         PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut UNSAFE_WRITER_BUF });
     writer.get_or_init(|| {
@@ -308,9 +308,8 @@ macro_rules! println {
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    WRITER
-        .0
-        .lock()
+    kernel_lib::lock!(WRITER
+        .0)
         .get_mut()
         .expect("WRITER NOT INITIALIZED")
         .write_fmt(args)

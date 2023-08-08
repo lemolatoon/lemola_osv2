@@ -3,7 +3,7 @@ use core::{alloc::Allocator, future::Future, task::Poll};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use bit_field::BitField;
-use spin::Mutex;
+use kernel_lib::mutex::Mutex;
 use static_assertions::const_assert_eq;
 use xhci::{
     accessor::{marker::ReadWrite, Mapper},
@@ -262,7 +262,7 @@ impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<'a,
                 .event_ring_dequeue_pointer() as *const trb::Link)
                 .read_volatile()
         };
-        let mut event_ring = event_ring.lock();
+        let mut event_ring = kernel_lib::lock!(event_ring);
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
             return Poll::Pending;
@@ -332,7 +332,7 @@ impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture
                 .event_ring_dequeue_pointer() as *const trb::Link)
                 .read_volatile()
         };
-        let mut event_ring = event_ring.lock();
+        let mut event_ring = kernel_lib::lock!(event_ring);
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
             return Poll::Pending;

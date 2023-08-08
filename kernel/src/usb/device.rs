@@ -3,8 +3,7 @@ use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
-use kernel_lib::{await_once_noblocking, await_sync};
-use spin::Mutex;
+use kernel_lib::{await_once_noblocking, await_sync, mutex::Mutex};
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, SetupPacket,
 };
@@ -282,7 +281,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 class_drivers
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-                let mut driver_info = class_drivers.mouse().lock();
+                log::debug!("before lock mouse");
+                let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
                 driver_info.driver.tick_until_running_state(self).unwrap();
             }
         } else {
@@ -352,7 +352,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64
         };
 
-        let mut registers = self.registers.lock();
+        let mut registers = kernel_lib::lock!(self.registers);
         log::debug!(
             "slot_id: {:?}, dci.address(): {}",
             self.slot_id,
@@ -392,7 +392,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            let mut registers = self.registers.lock();
+            let mut registers = kernel_lib::lock!(self.registers);
             let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
             EventRing::get_received_transfer_trb_on_trb(event_ring, &mut interrupter, trb_wait_on)
                 .await
@@ -424,7 +424,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         use xhci::context::InputHandler;
         let dci = DeviceContextIndex::from(endpoint_descriptor);
         let portsc = {
-            let registers = self.registers.lock();
+            let registers = kernel_lib::lock!(self.registers);
             registers
                 .port_register_set
                 .read_volatile_at(self.port_index)
@@ -482,11 +482,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 );
                 trb.set_slot_id(self.slot_id() as u8);
                 let trb_ptr = {
-                    let mut command_ring = self.command_ring.lock();
+                    let mut command_ring = kernel_lib::lock!(self.command_ring);
                     command_ring.push(command::Allowed::ConfigureEndpoint(trb))
                 } as u64;
                 let event_ring = Arc::clone(&self.event_ring);
-                let mut registers = self.registers.lock();
+                let mut registers = kernel_lib::lock!(self.registers);
                 registers.doorbell.update_volatile_at(0, |doorbell| {
                     doorbell.set_doorbell_target(0);
                     doorbell.set_doorbell_stream_id(0);
@@ -561,23 +561,28 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         transfer_ring.push(transfer::Allowed::Normal(normal));
 
         let slot_id = self.slot_id();
-        let mut registers = self.registers.lock();
-        registers
-            .doorbell
-            .update_volatile_at(self.slot_id(), |doorbell| {
-                doorbell.set_doorbell_target(dci.address());
-                doorbell.set_doorbell_stream_id(0);
-            });
-        let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-        log::debug!("before debug");
-        let trb = EventRing::get_received_transfer_trb_on_slot(
-            event_ring,
-            &mut interrupter,
-            slot_id as u8,
-        )
-        .await;
+        {
+            let mut registers = kernel_lib::lock!(self.registers);
+            registers
+                .doorbell
+                .update_volatile_at(self.slot_id(), |doorbell| {
+                    doorbell.set_doorbell_target(dci.address());
+                    doorbell.set_doorbell_stream_id(0);
+                });
+        }
+        // TODO: ここでawaitをまたいでlockを保持しているのがdeadlockになっているので、registersをArc::cloneして渡すようにする
+        let trb = {
+            let mut registers = kernel_lib::lock!(self.registers);
+            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            log::debug!("before debug");
+            EventRing::get_received_transfer_trb_on_slot(
+                event_ring,
+                &mut interrupter,
+                slot_id as u8,
+            )
+            .await
+        };
         let transferred_length = trb.trb_transfer_length();
-        drop(registers);
 
         let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
         transfer_ring.dump_state();

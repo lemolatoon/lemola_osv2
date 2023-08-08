@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use spin::Mutex;
+use kernel_lib::mutex::Mutex;
 
 const PORT: u16 = 0x3f8;
 
@@ -43,7 +43,7 @@ impl SerialWriter {
 
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let lock = self.0.lock();
+        let lock = kernel_lib::lock!(self.0);
         for ch in s.chars() {
             if ch == '\n' {
                 write_serial_str("\r\n");

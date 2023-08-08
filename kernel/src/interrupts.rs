@@ -1,10 +1,9 @@
-use kernel_lib::await_sync;
 use x86_64::{
     set_general_handler,
     structures::idt::{self, InterruptStackFrame},
 };
 
-use crate::xhci::{write_local_apic_id, XHC};
+use crate::xhci::write_local_apic_id;
 
 static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 

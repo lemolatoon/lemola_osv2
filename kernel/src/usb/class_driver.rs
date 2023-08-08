@@ -4,7 +4,7 @@ pub mod mouse;
 
 use core::mem::MaybeUninit;
 
-use spin::Mutex;
+use kernel_lib::mutex::Mutex;
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Direction, Driver, DriverError,
     EndpointDescriptor, RequestCode, RequestDirection, RequestKind, RequestRecipient, RequestType,
@@ -788,7 +788,7 @@ macro_rules! add_device {
             device_descriptor: DeviceDescriptor,
             addr: u8,
         ) -> Result<(), DriverError> {
-            let mut device = self.$device.lock();
+            let mut device = self.$device.lock(file!(), line!());
             if Driver::want_device(&device.driver, &device_descriptor) {
                 device.slot_id = Some(slot_id);
                 return Driver::add_device(&mut device.driver, device_descriptor, addr);

@@ -9,6 +9,7 @@ pub mod logger;
 pub mod render;
 pub mod shapes;
 pub mod write_to;
+pub mod mutex;
 use core::fmt;
 
 use common::types::PixcelFormat;

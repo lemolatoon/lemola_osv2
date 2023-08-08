@@ -4,7 +4,7 @@ use core::panic;
 
 use alloc::sync::Arc;
 use alloc::{boxed::Box, vec::Vec};
-use spin::Mutex;
+use kernel_lib::mutex::Mutex;
 use xhci::accessor::Mapper;
 use xhci::context::Device32Byte;
 
@@ -46,14 +46,16 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         ptr_head: Box<[*mut [u8; PAGE_SIZE]], impl core::alloc::Allocator>,
     ) {
         // This pointer cast is safe, because it is based on xhci specification
-        let mut device_contexts = self.device_context_array.device_contexts.lock();
-        device_contexts[0] =
-            Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device32Byte
-                as Device32BytePtr;
+        let mut device_contexts = kernel_lib::lock!(self.device_context_array.device_contexts);
+        device_contexts[0] = Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device32Byte
+            as Device32BytePtr;
     }
 
     pub fn get_device_contexts_head_ptr(&mut self) -> usize {
-        self.device_context_array.device_contexts.lock().as_mut_ptr() as usize
+        kernel_lib::lock!(self.device_context_array
+            .device_contexts
+        )
+            .as_mut_ptr() as usize
     }
 
     pub fn allocate_device(
@@ -70,23 +72,25 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
             panic!("slot_id is out of range");
         }
 
-        let mut device_context_info =
-            self.device_context_array.device_context_infos[slot_id].lock();
-        if device_context_info.is_some() {
-            log::error!("device context at {} is already allocated", slot_id);
-            panic!("device context at {} is already allocated", slot_id);
-        }
 
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
         let command_ring = Arc::clone(&self.command_ring);
-        *device_context_info = Some(DeviceContextInfo::new(
-            port_index,
-            slot_id,
-            registers,
-            event_ring,
-            command_ring,
-        ));
+        {
+            let mut device_context_info =
+                kernel_lib::lock!(self.device_context_array.device_context_infos[slot_id]);
+            if device_context_info.is_some() {
+                log::error!("device context at {} is already allocated", slot_id);
+                panic!("device context at {} is already allocated", slot_id);
+            }
+            *device_context_info = Some(DeviceContextInfo::new(
+                port_index,
+                slot_id,
+                registers,
+                event_ring,
+                command_ring,
+            ));
+        }
         Arc::clone(&self.device_context_array.device_context_infos[slot_id])
     }
 
@@ -102,15 +106,17 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
             log::error!("Invalid slot_id: {}", slot_id);
             panic!("Invalid slot_id: {}", slot_id);
         }
-        let mut device_context_info =
-            self.device_context_array.device_context_infos[slot_id].lock();
-        let device_context_info = device_context_info.as_mut().unwrap();
-        let mut device_contexts = self.device_context_array.device_contexts.lock();
-        device_contexts[slot_id] = &*device_context_info.device_context
-            as *const DeviceContextWrapper
-            as *mut Device32Byte
-            as Device32BytePtr;
-    }
+        let device_context_ptr = {
+            let mut device_context_info =
+                kernel_lib::lock!(self.device_context_array.device_context_infos[slot_id]);
+            let device_context_info = device_context_info.as_mut().unwrap();
+            &*device_context_info.device_context
+            as *const DeviceContextWrapper as *mut Device32Byte
+            as Device32BytePtr
+        };
+        let mut device_contexts = kernel_lib::lock!(self.device_context_array.device_contexts);
+        device_contexts[slot_id] = device_context_ptr
+        }
 }
 
 #[derive(Debug)]
@@ -138,7 +144,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextArray<M, &'static GlobalAlloc
         device_context_infos.resize_with(device_contexts_len, || Arc::new(Mutex::new(None)));
         let device_context_infos = device_context_infos;
 
-
         Self {
             device_contexts,
             device_context_infos,
@@ -146,6 +151,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextArray<M, &'static GlobalAlloc
     }
 
     pub fn max_slots(&self) -> usize {
-        self.device_contexts.lock().len() - 1
+        kernel_lib::lock!(self.device_contexts).len() - 1
     }
 }
