@@ -13,7 +13,7 @@ use kernel::{
     memory::MemoryMapper,
     println, serial_println,
     usb::device::DeviceContextInfo,
-    xhci::{init_xhci_controller, XHC},
+    xhci::{init_xhci_controller, XHC}, multitasking::{executor::Executor, task::{Task, Priority}},
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
@@ -49,16 +49,25 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     // FIXME: this comment outted code causes infinite exception loop
     // unsafe { asm!("ud2") };
 
-    x86_64::instructions::interrupts::enable();
+    // x86_64::instructions::interrupts::enable();
 
-    loop {
-        count += 1;
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let mut controller = XHC.lock();
-            let controller = controller.get_mut().unwrap();
-            controller.tick_mouse(count).unwrap();
-        });
-    }
+    let mut executor = Executor::new();
+    let polling_task = Task::new(Priority::Default, kernel::xhci::poll_forever());
+    let tick_mouse_task = Task::new(Priority::High, kernel::xhci::tick_mouse_forever());
+    // let tick_keyboard_task = Task::new(Priority::High, kernel::xhci::tick_keyboard_forever());
+    executor.spawn(polling_task);
+    executor.spawn(tick_mouse_task);
+    // executor.spawn(tick_keyboard_task);
+
+    executor.run();
+    // loop {
+    //     // count += 1;
+    //     // x86_64::instructions::interrupts::without_interrupts(|| {
+    //     //     let mut controller = XHC.lock();
+    //     //     let controller = controller.get_mut().unwrap();
+    //     //     controller.tick_mouse(count).unwrap();
+    //     // });
+    // }
 }
 
 #[panic_handler]

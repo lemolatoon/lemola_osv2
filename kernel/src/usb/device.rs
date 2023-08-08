@@ -69,7 +69,7 @@ impl DeviceContextWrapper {
 }
 
 #[derive(Debug)]
-pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
+pub struct DeviceContextInfo<M: Mapper + Clone + Send + Sync, A: Allocator> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     command_ring: Arc<Mutex<CommandRing>>,
@@ -82,7 +82,7 @@ pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
     transfer_rings: [Option<Box<TransferRing<A>, A>>; 31],
 }
 
-impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn new(
         port_index: usize,
         slot_id: usize,
@@ -636,7 +636,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     }
 }
 
-impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAllocator> {
     // request descriptor impls
 
     pub async fn request_device_descriptor(&mut self) -> DeviceDescriptor {
@@ -844,7 +844,7 @@ impl usb_host::Endpoint for EndpointId {
     }
 }
 
-impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> usb_host::USBHost for DeviceContextInfo<M, &'static GlobalAllocator> {
     fn control_transfer(
         &mut self,
         ep: &mut dyn usb_host::Endpoint,
@@ -887,7 +887,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
 }
 
 #[async_trait]
-impl<M: Mapper + Clone + Sync + Send> AsyncUSBHost
+impl<M: Mapper + Clone + Send + Sync + Sync + Send> AsyncUSBHost
     for DeviceContextInfo<M, &'static GlobalAllocator>
 {
     async fn control_transfer(

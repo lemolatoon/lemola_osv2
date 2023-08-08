@@ -75,7 +75,7 @@ pub struct EventRing<A: Allocator> {
 }
 
 impl EventRing<&'static GlobalAllocator> {
-    pub fn new<M: Mapper + Clone>(
+    pub fn new<M: Mapper + Clone + Send + Sync>(
         buf_size: u16,
         primary_interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Self {
@@ -157,7 +157,7 @@ impl EventRing<&'static GlobalAllocator> {
         self.popped.pop()
     }
 
-    pub fn pop<M: Mapper + Clone>(
+    pub fn pop<M: Mapper + Clone + Send + Sync>(
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Result<event::Allowed, TrbRaw> {
@@ -190,7 +190,7 @@ impl EventRing<&'static GlobalAllocator> {
         event::Allowed::try_from(popped.into_raw()).map_err(TrbRaw::new_unchecked)
     }
 
-    pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone>(
+    pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
         slot_id: u8,
@@ -203,7 +203,7 @@ impl EventRing<&'static GlobalAllocator> {
         .await
     }
 
-    pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone>(
+    pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
         trb_pointer: u64,
@@ -217,7 +217,7 @@ impl EventRing<&'static GlobalAllocator> {
         .await
     }
 
-    pub async fn get_received_command_trb<M: Mapper + Clone>(
+    pub async fn get_received_command_trb<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
         trb_ptr: u64,
@@ -236,13 +236,13 @@ enum TransferEventWaitKind {
     TrbPtr(u64),
 }
 
-struct TransferEventFuture<'a, 'b, M: Mapper + Clone> {
+struct TransferEventFuture<'a, 'b, M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
     pub wait_on: TransferEventWaitKind,
 }
 
-impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
+impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<'a, 'b, M> {
     type Output = trb::event::TransferEvent;
 
     fn poll(
@@ -306,13 +306,13 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
     }
 }
 
-struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone> {
+struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
     pub wait_on: u64, // trb_ptr
 }
 
-impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
+impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture<'a, 'b, M> {
     type Output = trb::event::CommandCompletion;
 
     fn poll(

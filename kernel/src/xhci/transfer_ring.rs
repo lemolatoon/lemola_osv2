@@ -52,7 +52,7 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn fill_with_normal(&mut self, buf_size: usize) {
-        for idx in 0..(self.buffer_len() - 1) {
+        for _idx in 0..(self.buffer_len() - 1) {
             self.dump_state();
             let mut normal = transfer::Normal::new();
             let buf = alloc::vec![0u8; buf_size];

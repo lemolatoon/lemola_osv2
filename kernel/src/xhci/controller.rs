@@ -16,7 +16,7 @@ use crate::{
     memory::PAGE_SIZE,
     usb::{
         class_driver::ClassDriverManager,
-        device::{DeviceContextIndex, InputContextWrapper},
+        device::{DeviceContextIndex, InputContextWrapper, DeviceContextInfo},
     },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
@@ -30,7 +30,7 @@ use super::{
 #[derive(Debug)]
 pub struct XhciController<M, A, MF, KF>
 where
-    M: Mapper + Clone,
+    M: Mapper + Clone + Send + Sync,
     A: Allocator,
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
@@ -46,7 +46,7 @@ where
 
 impl<M, MF, KF> XhciController<M, &'static GlobalAllocator, MF, KF>
 where
-    M: Mapper + Clone,
+    M: Mapper + Clone + Send + Sync,
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
@@ -193,7 +193,7 @@ where
         true
     }
 
-    pub fn process_event(&mut self) {
+    pub async fn process_event(&mut self) {
         let mut registers = self.registers.lock();
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
@@ -209,7 +209,7 @@ where
             if let Some(trb) = event_ring.pop_already_popped() {
                 drop(event_ring);
                 drop(registers);
-                self.process_event_ring_event(trb);
+                self.process_event_ring_event(trb).await;
                 return;
             }
             return;
@@ -222,7 +222,7 @@ where
         drop(event_ring);
         let _trb = match popped {
             Ok(event_trb) => {
-                self.process_event_ring_event(event_trb);
+                self.process_event_ring_event(event_trb).await;
                 return;
             }
             Err(raw) => raw,
@@ -231,13 +231,13 @@ where
         todo!()
     }
 
-    pub fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
+    pub async fn process_event_ring_event(&mut self, event_trb: event::Allowed) {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
                 self.process_transfer_event(transfer_event);
             }
             event::Allowed::CommandCompletion(command_completion) => {
-                self.process_command_completion_event(command_completion);
+                self.process_command_completion_event(command_completion).await;
             }
             event::Allowed::PortStatusChange(port_status_change) => {
                 self.process_port_status_change_event(port_status_change)
@@ -414,7 +414,7 @@ where
         })
     }
 
-    pub fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
+    pub async fn initialize_device_at(&mut self, port_idx: u8, slot_id: u8) {
         log::debug!(
             "initialize device at: port_id: {}, slot_id: {}",
             port_idx + 1,
@@ -429,7 +429,7 @@ where
             .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
 
         let class_drivers = &mut self.class_driver_manager;
-        await_sync!(device.start_initialization(class_drivers));
+        device.start_initialization(class_drivers).await;
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
@@ -578,14 +578,14 @@ where
         log::debug!("OS has owned xHC!!");
     }
 
-    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Option<&mut dyn usb_host::USBHost> {
+    pub fn usb_device_host_at(&mut self, slot_id: usize) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
         self.device_manager.device_host_by_slot_id_mut(slot_id)
     }
 }
 
 impl<M, MF, KF> XhciController<M, &'static GlobalAllocator, MF, KF>
 where
-    M: Mapper + Clone,
+    M: Mapper + Clone + Send + Sync,
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
@@ -609,7 +609,7 @@ where
         }
     }
 
-    fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
+    async fn process_command_completion_event(&mut self, event: trb::event::CommandCompletion) {
         let slot_id = event.slot_id();
         let Ok(completion_code) = event.completion_code() else {
             log::error!(
@@ -704,7 +704,7 @@ where
                     }
                 }
 
-                self.initialize_device_at(port_index, slot_id);
+                self.initialize_device_at(port_index, slot_id).await;
             }
             trb::command::Allowed::ConfigureEndpoint(_) => {
                 let mut event_ring = self.event_ring.lock();
@@ -790,12 +790,29 @@ macro_rules! gen_tick {
         }
     };
 }
+
+macro_rules! gen_async_tick {
+    ($fname:ident, $device:ident) => {
+        pub async fn $fname(&mut self, count: usize) -> Result<(), usb_host::DriverError> {
+            use crate::usb::traits::AsyncDriver;
+            if let Some(slot_id) = self.class_driver_manager.$device().0 {
+                if let Some(host) = self.device_manager.device_host_by_slot_id_mut(slot_id) {
+                    self.class_driver_manager.$device().1.tick(count, host).await?;
+                }
+            }
+
+            Ok(())
+        }
+    };
+}
 impl<M, MF, KF> XhciController<M, &'static GlobalAllocator, MF, KF>
 where
-    M: Mapper + Clone,
+    M: Mapper + Clone + Send + Sync,
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
     gen_tick!(tick_keyboard, keyboard);
     gen_tick!(tick_mouse, mouse);
+    gen_async_tick!(async_tick_keyboard, keyboard);
+    gen_async_tick!(async_tick_mouse, mouse);
 }

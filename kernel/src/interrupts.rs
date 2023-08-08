@@ -1,3 +1,4 @@
+use kernel_lib::await_sync;
 use x86_64::{
     set_general_handler,
     structures::idt::{self, InterruptStackFrame},
@@ -20,7 +21,8 @@ fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_
         let mut xhc = XHC.lock();
         if let Some(xhc) = xhc.get_mut() {
             while xhc.pending_event() {
-                xhc.process_event();
+                // TODO: push this task to task queue
+                await_sync!(xhc.process_event());
             }
         }
         log::info!("end xhci interrupt handler called");

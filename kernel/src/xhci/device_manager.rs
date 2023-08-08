@@ -18,7 +18,7 @@ use super::event_ring::EventRing;
 type Device32BytePtr = u64;
 
 #[derive(Debug)]
-pub struct DeviceManager<M: Mapper + Clone, A: Allocator> {
+pub struct DeviceManager<M: Mapper + Clone + Send + Sync, A: Allocator> {
     /// len is max_slots_enabled
     device_context_array: DeviceContextArray<M, A>,
     registers: Arc<Mutex<xhci::Registers<M>>>,
@@ -26,7 +26,7 @@ pub struct DeviceManager<M: Mapper + Clone, A: Allocator> {
     command_ring: Arc<Mutex<CommandRing>>,
 }
 
-impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAllocator> {
     pub fn new(
         max_slots: u8,
         registers: Arc<Mutex<xhci::Registers<M>>>,
@@ -106,9 +106,8 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
     pub fn device_host_by_slot_id_mut(
         &mut self,
         slot_id: usize,
-    ) -> Option<&mut dyn usb_host::USBHost> {
+    ) -> Option<&mut DeviceContextInfo<M, &'static GlobalAllocator>> {
         if let Some(host) = self.device_context_array.device_context_infos[slot_id].as_mut() {
-            let host: &mut dyn usb_host::USBHost = host;
             return Some(host);
         }
         None
@@ -130,12 +129,12 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
 }
 
 #[derive(Debug)]
-struct DeviceContextArray<M: Mapper + Clone, A: Allocator> {
+struct DeviceContextArray<M: Mapper + Clone + Send + Sync, A: Allocator> {
     device_contexts: Box<[Device32BytePtr], A>,
     device_context_infos: Vec<Option<DeviceContextInfo<M, A>>>,
 }
 
-impl<M: Mapper + Clone> DeviceContextArray<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> DeviceContextArray<M, &'static GlobalAllocator> {
     pub fn new(max_slots: u8) -> Self {
         let device_contexts_len = max_slots as usize + 1;
         const ALIGNMENT: usize = 64;

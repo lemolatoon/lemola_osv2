@@ -33,6 +33,57 @@ pub fn write_local_apic_id(offset: usize, data: u32) {
     unsafe { ((LOCAL_APIC_ADDRESS + offset )as *mut u32).write_volatile(data) };
 }
 
+pub async fn poll_forever() {
+    loop {
+        // for avoiding deadlock
+        // x86_64::instructions::interrupts::disable();
+        {
+            log::debug!("poll_forever can lock: {}", XHC.is_locked());
+            if let Some(mut xhc) = XHC.try_lock() {
+                if let Some(xhc) = xhc.get_mut() {
+                    while xhc.pending_event() {
+                        xhc.process_event().await;
+                    }
+                }
+            }
+        }
+        // x86_64::instructions::interrupts::enable();
+    }
+}
+
+pub async fn tick_mouse_forever() {
+    let mut count = 0;
+    loop {
+        // for avoiding deadlock
+        // x86_64::instructions::interrupts::disable();
+        {
+            log::debug!("poll_forever can lock: {}", XHC.is_locked());
+            if let Some(mut xhc) = XHC.try_lock() {
+                if let Some(xhc) = xhc.get_mut() {
+                    xhc.async_tick_mouse(count).await.unwrap();
+                }
+            }
+        }
+        count+= 1;
+        // x86_64::instructions::interrupts::enable();
+    }
+}
+
+pub async fn tick_keyboard_forever() {
+    let count = 0;
+    loop {
+        // for avoiding deadlock
+        // x86_64::instructions::interrupts::disable();
+        {
+            let mut xhc = XHC.lock();
+            if let Some(xhc) = xhc.get_mut() {
+                xhc.async_tick_keyboard(count).await.unwrap();
+            }
+        }
+        // x86_64::instructions::interrupts::enable();
+    }
+}
+
 pub fn init_xhci_controller() {
     let devices = crate::pci::register::scan_all_bus();
     for device in &devices {

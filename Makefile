@@ -38,9 +38,9 @@ run: disk.img
 		-drive file=disk.img,format=raw \
 		-device nec-usb-xhci,id=xhci \
  		-device usb-mouse \
-		-device usb-kbd \
 		-serial telnet::5555,server,nowait \
 		-monitor stdio
+#		-device usb-kbd 
 # for serial port
 # telnet localhost 5555
 
