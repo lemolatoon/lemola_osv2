@@ -3,7 +3,7 @@ use x86_64::{
     structures::idt::{self, InterruptStackFrame},
 };
 
-use crate::xhci::XHC;
+use crate::xhci::{XHC, write_local_apic_id};
 
 static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 
@@ -25,6 +25,8 @@ fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_
         }
         log::info!("end xhci interrupt handler called");
     });
+
+    write_local_apic_id(0xb0, 0);
 }
 
 fn general_handler(stack_frame: InterruptStackFrame, index: u8, error_code: Option<u64>) {
