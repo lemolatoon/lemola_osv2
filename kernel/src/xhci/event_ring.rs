@@ -270,11 +270,12 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
         match wait_on {
             TransferEventWaitKind::SlotId(slot_id) => match event_ring.pop(interrupter) {
                 Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == *slot_id => {
-                    log::debug!("got event: {:?}", event);
+                    log::debug!("got event: {:x?}", event);
                     Poll::Ready(event)
                 }
                 Ok(trb) => {
                     // EventRing does not have front
+                    log::warn!("ignoring trb: {:?}", trb);
                     event_ring.push(trb);
                     Poll::Pending
                 }
@@ -291,6 +292,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
                     }
                     Ok(trb) => {
                         // EventRing does not have front
+                        log::warn!("ignoring trb: {:?}", trb);
                         event_ring.push(trb);
                         Poll::Pending
                     }

@@ -98,6 +98,44 @@ where
             endpoint_searcher,
         }
     }
+
+    pub fn tick_until_running_state(
+        &mut self,
+        host: &mut dyn usb_host::USBHost,
+    ) -> Result<(), DriverError> {
+        let mut millis = 0;
+        while self.devices.iter().any(|d| {
+            d.as_ref()
+                .map_or(false, |dd| dd.state != DeviceState::Running)
+        }) {
+            for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
+                if device.state == DeviceState::Running {
+                    continue;
+                }
+                if let Err(TransferError::Permanent(e)) =
+                    device.fsm(millis, host, &mut self.callback)
+                {
+                    return Err(DriverError::Permanent(device.addr, e));
+                };
+                millis += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn call_callback_at(&mut self, address: u8, buffer: &[u8]) {
+        (self.callback)(address, buffer)
+    }
+
+    pub fn endpoints_mut(&mut self, address: u8) -> &mut [Option<Endpoint>; MAX_ENDPOINTS] {
+        let device = self.devices
+            .iter_mut()
+            .find(|d| d.as_ref().map_or(false, |dd| dd.addr == address))
+            .unwrap()
+            .as_mut()
+            .unwrap();
+        &mut device.endpoints
+    }
 }
 
 impl<
@@ -608,6 +646,10 @@ impl<
 
         Ok(())
     }
+
+    pub fn endpoints(&self) -> &[Option<Endpoint>] {
+        &self.endpoints
+    }
 }
 
 impl<
@@ -772,6 +814,7 @@ macro_rules! tick {
     };
 }
 
+#[derive(Debug)]
 pub struct ClassDriverManager<MF, KF>
 where
     MF: Fn(u8, &[u8]),
@@ -812,6 +855,33 @@ where
         }
         tick_device!(mouse);
         tick_device!(keyboard);
+        Ok(())
+    }
+
+    pub fn driver_at(&mut self, slot_id: usize) -> Option<&mut dyn Driver> {
+        if let Some(slot) = self.mouse.0 {
+            if slot == slot_id {
+                return Some(&mut self.mouse.1);
+            }
+        }
+        if let Some(slot) = self.keyboard.0 {
+            if slot == slot_id {
+                return Some(&mut self.keyboard.1);
+            }
+        }
+        None
+    }
+
+    pub fn tick_at(
+        &mut self,
+        slot_id: usize,
+        millis: usize,
+        host: &mut dyn usb_host::USBHost,
+    ) -> Result<(), DriverError> {
+        if let Some(driver) = self.driver_at(slot_id) {
+            driver.tick(millis, host)?;
+        }
+
         Ok(())
     }
 

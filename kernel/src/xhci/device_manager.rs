@@ -15,6 +15,8 @@ use crate::usb::device::{DeviceContextInfo, DeviceContextWrapper};
 use super::command_ring::CommandRing;
 use super::event_ring::EventRing;
 
+type Device32BytePtr = u64;
+
 #[derive(Debug)]
 pub struct DeviceManager<M: Mapper + Clone, A: Allocator> {
     /// len is max_slots_enabled
@@ -45,10 +47,11 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
     ) {
         // This pointer cast is safe, because it is based on xhci specification
         self.device_context_array.device_contexts[0] =
-            Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device32Byte;
+            Box::leak(ptr_head) as *mut [*mut [u8; PAGE_SIZE]] as *mut Device32Byte
+                as Device32BytePtr;
     }
 
-    pub fn get_device_contexts_head_ptr(&mut self) -> *mut *mut Device32Byte {
+    pub fn get_device_contexts_head_ptr(&mut self) -> *mut Device32BytePtr {
         self.device_context_array.device_contexts.as_mut_ptr()
     }
 
@@ -121,13 +124,14 @@ impl<M: Mapper + Clone> DeviceManager<M, &'static GlobalAllocator> {
             .unwrap();
         self.device_context_array.device_contexts[slot_id] = &*device_context_info.device_context
             as *const DeviceContextWrapper
-            as *mut Device32Byte;
+            as *mut Device32Byte
+            as Device32BytePtr;
     }
 }
 
 #[derive(Debug)]
 struct DeviceContextArray<M: Mapper + Clone, A: Allocator> {
-    device_contexts: Box<[*mut Device32Byte], A>,
+    device_contexts: Box<[Device32BytePtr], A>,
     device_context_infos: Vec<Option<DeviceContextInfo<M, A>>>,
 }
 
@@ -141,7 +145,7 @@ impl<M: Mapper + Clone> DeviceContextArray<M, &'static GlobalAllocator> {
             device_contexts_len,
             ALIGNMENT,
             PAGE_SIZE,
-            || 0 as *mut Device32Byte,
+            || 0 as Device32BytePtr,
         )
         .expect("DeviceContextArray allocation failed");
         let mut device_context_infos = Vec::with_capacity(device_contexts_len);

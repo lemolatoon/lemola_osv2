@@ -269,7 +269,6 @@ impl log::Log for SerialAndVgaCharWriter {
                 // let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
                 let mut serial_writer = InstantWriter::new(|s| {
                     serial_print!("{}", s);
-                    crate::print!("{}", s)
                 });
                 DecoratedLog::write(
                     &mut serial_writer,

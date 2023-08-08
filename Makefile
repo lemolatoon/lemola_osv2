@@ -57,6 +57,15 @@ run_gdb: disk.img
 		-gdb tcp::12345 -S
 # on gdb
 # target remote localhost:12345
+
+telnet:
+	while true; do \
+		telnet localhost 5555 2> /dev/null | grep -v "Trying 127.0.0.1..."; \
+		if [ "$$?" -eq 0 ]; then \
+			echo "===========disconnected==========="; \
+			fi; \
+		sleep 1; \
+	done;
 	
 test_kernel:
 	cd kernel-lib && \
