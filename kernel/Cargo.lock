@@ -251,9 +251,9 @@ dependencies = [
 
 [[package]]
 name = "xhci"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aad8d87662cea0d5272e94c582376124ba9ce42c97c3022e251736f215dd9863"
+checksum = "09f3f0483969259f2adb6524054400d94ac352e59fa37da6c6ca3b9b3d83ff83"
 dependencies = [
  "accessor",
  "bit_field",

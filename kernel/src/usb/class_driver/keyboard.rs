@@ -17,7 +17,7 @@ const MAX_ENDPOINTS: usize = 2;
 // The maximum size configuration descriptor we can handle.
 const CONFIG_BUFFER_LEN: usize = 256;
 
-const N_IN_TRANSFER_BYTES: usize = 8;
+pub const N_IN_TRANSFER_BYTES: usize = 8;
 
 /// Boot protocol keyboard driver for USB hosts.
 pub type BootKeyboardDriver<F> = InputOnlyDriver<

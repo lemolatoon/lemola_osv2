@@ -29,7 +29,6 @@ impl Executor {
                 match task.poll(&mut context) {
                     core::task::Poll::Ready(()) => {}
                     core::task::Poll::Pending => {
-                        log::debug!("pending");
                         self.task_queue.push_back(task);
                     }
                 }

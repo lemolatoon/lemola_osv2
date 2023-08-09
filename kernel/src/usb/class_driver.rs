@@ -125,6 +125,16 @@ where
     }
 
     pub fn call_callback_at(&mut self, address: u8, buffer: &[u8]) {
+        assert_eq!(
+            self.devices
+                .iter()
+                .find(|d| d.as_ref().map_or(false, |d| d.addr == address))
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .state,
+            DeviceState::Running
+        );
         (self.callback)(address, buffer)
     }
 
@@ -898,7 +908,6 @@ where
 
         None
     }
-
 
     pub fn mouse(&self) -> &Mutex<DriverInfo<MouseDriver<MF>>> {
         &self.mouse

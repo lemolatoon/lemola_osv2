@@ -1,5 +1,5 @@
 extern crate alloc;
-use core::alloc::Allocator;
+use core::alloc::{Allocator, Layout};
 
 use alloc::boxed::Box;
 use xhci::ring::trb::{self, transfer};
@@ -53,17 +53,18 @@ impl TransferRing<&'static GlobalAllocator> {
 
     pub fn fill_with_normal(&mut self, buf_size: usize) {
         for _idx in 0..(self.buffer_len() - 1) {
-            self.dump_state();
             let mut normal = transfer::Normal::new();
-            let buf = alloc::vec![0u8; buf_size];
+            let layout = Layout::from_size_align(buf_size, PAGE_SIZE).unwrap();
+            let buf = unsafe { alloc::alloc::alloc_zeroed(layout) };
             normal
-                .set_data_buffer_pointer(buf.as_ptr() as u64)
-                .set_trb_transfer_length(buf.len() as u32)
+                .set_data_buffer_pointer(buf as u64)
+                .set_trb_transfer_length(buf_size as u32)
                 .set_td_size(0)
                 .set_interrupt_on_completion()
                 .set_interrupt_on_short_packet()
                 .set_interrupter_target(0);
             self.push(transfer::Allowed::Normal(normal));
+            self.dump_state();
         }
     }
 
@@ -117,9 +118,7 @@ impl TransferRing<&'static GlobalAllocator> {
             .unwrap()
         {
             transfer::Allowed::Normal(normal) => {
-                let mut data_buffer_pointer = normal.data_buffer_pointer();
-                data_buffer_pointer = ((data_buffer_pointer & 0x0000_0000_ffff_ffff) << 32)
-                    | ((0xffff_ffff_0000_0000 & data_buffer_pointer) >> 32);
+                let data_buffer_pointer = normal.data_buffer_pointer();
                 cmd.set_data_buffer_pointer(data_buffer_pointer);
                 cmd.set_trb_transfer_length(normal.trb_transfer_length());
             }

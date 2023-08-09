@@ -282,8 +282,24 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
                 log::debug!("before lock mouse");
-                let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
-                driver_info.driver.tick_until_running_state(self).unwrap();
+                {
+                    let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
+                    driver_info.driver.tick_until_running_state(self).unwrap();
+                    let ep = driver_info.driver.endpoints_mut(address)[0]
+                        .as_mut()
+                        .unwrap();
+                    await_sync!(self.init_transfer_ring_for_interrupt_at(
+                        ep,
+                        endpoint_descriptor.as_ref().unwrap()
+                    ))
+                    .unwrap();
+                };
+                let transfer_ring = self
+                    .transfer_ring_at_mut(dci)
+                    .as_mut()
+                    .expect("transfer ring not allocated")
+                    .as_mut();
+                transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
@@ -392,8 +408,12 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            EventRing::get_received_transfer_trb_on_trb(event_ring, Arc::clone(&self.registers), trb_wait_on)
-                .await
+            EventRing::get_received_transfer_trb_on_trb(
+                event_ring,
+                Arc::clone(&self.registers),
+                trb_wait_on,
+            )
+            .await
         };
         match trb.completion_code() {
             Ok(event::CompletionCode::ShortPacket) => {}
@@ -421,6 +441,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
     ) -> Result<bool, usb_host::TransferError> {
         use xhci::context::InputHandler;
         let dci = DeviceContextIndex::from(endpoint_descriptor);
+        log::debug!("dci: {:?}", dci);
         let portsc = {
             let registers = kernel_lib::lock!(self.registers);
             registers
@@ -542,6 +563,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             ep.transfer_type(),
             usb_host::TransferType::Interrupt
         ));
+        log::debug!("dci: {:?}", dci);
         self.init_transfer_ring_for_interrupt_at(ep, &endpoint_descriptor)
             .await?;
 
@@ -597,10 +619,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             transfer::Allowed::EventData(_) => todo!(),
             transfer::Allowed::Noop(_) => todo!(),
             transfer::Allowed::Normal(normal) => {
-                let mut normal_data_buffer_pointer = normal.data_buffer_pointer();
-                normal_data_buffer_pointer = (normal_data_buffer_pointer & 0x0000_0000_ffff_ffff)
-                    << 32
-                    | (normal_data_buffer_pointer & 0xffff_ffff_0000_0000) >> 32;
+                let normal_data_buffer_pointer = normal.data_buffer_pointer();
                 let copying_length = core::cmp::min(transferred_length, buf.len() as u32);
                 let buffer = unsafe {
                     core::slice::from_raw_parts(

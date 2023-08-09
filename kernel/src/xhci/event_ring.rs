@@ -267,10 +267,7 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                 .read_volatile()
                 .event_ring_dequeue_pointer() as *const trb::Link
         };
-        let event_ring_trb = unsafe {
-            event_ring_dequeue_pointer
-                .read_volatile()
-        };
+        let event_ring_trb = unsafe { event_ring_dequeue_pointer.read_volatile() };
         let event_ring_cycle_bit = {
             let event_ring = kernel_lib::lock!(event_ring);
             event_ring.cycle_bit()

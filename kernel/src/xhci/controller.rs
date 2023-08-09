@@ -15,7 +15,7 @@ use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
     usb::{
-        class_driver::{ClassDriverManager, DriverKind},
+        class_driver::{keyboard, mouse, ClassDriverManager, DriverKind},
         device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
     },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
@@ -607,7 +607,7 @@ where
     }
 
     pub fn usb_device_host_at(
-        &mut self,
+        &self,
         slot_id: usize,
     ) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
         self.device_manager.device_by_slot_id(slot_id)
@@ -778,13 +778,14 @@ where
         }
     }
 
-    fn process_transfer_event<MFF, KFF>(&self, event: trb::event::TransferEvent,
+    fn process_transfer_event<MFF, KFF>(
+        &self,
+        event: trb::event::TransferEvent,
         class_driver_manager: &ClassDriverManager<MFF, KFF>,
-     )
-     where 
+    ) where
         MFF: Fn(u8, &[u8]),
         KFF: Fn(u8, &[u8]),
-      {
+    {
         log::debug!("TransferEvent received: {:?}", &event);
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
@@ -809,32 +810,78 @@ where
         let slot_id = event.slot_id();
         let dci = event.endpoint_id();
 
-
         let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
         let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
-        if let transfer::Allowed::Normal(_normal) = trb {
+        if let transfer::Allowed::Normal(normal) = trb {
             // let transfer_ring = device
             //     .transfer_ring_at_mut(DeviceContextIndex::checked_new(dci))
             //     .as_mut()
             //     .unwrap();
 
-            // TODO: use appropriate millis
+            let buffer = normal.data_buffer_pointer() as *mut u8;
             let driver_kind = class_driver_manager.driver_kind(slot_id as usize);
+            log::debug!("driver_kind: {:?}", driver_kind);
             match driver_kind {
-                Some(DriverKind::Mouse) => todo!("mouse"),
-                Some(DriverKind::Keyboard) => todo!("keyboard"),
+                Some(DriverKind::Mouse) => {
+                    assert_eq!(
+                        normal.trb_transfer_length(),
+                        mouse::N_IN_TRANSFER_BYTES as u32
+                    );
+                    assert_eq!(3, mouse::N_IN_TRANSFER_BYTES as u32);
+                    log::debug!("buffer: {:p}", buffer);
+                    log::debug!("trb_transfer_length: {}", normal.trb_transfer_length());
+                    let address = {
+                        let device = self.usb_device_host_at(slot_id as usize);
+                        let device = kernel_lib::lock!(device);
+                        device.as_ref().unwrap().device_address()
+                    };
+                    let mut mouse = kernel_lib::lock!(class_driver_manager.mouse());
+                    let buffer =
+                        unsafe { core::slice::from_raw_parts(buffer, mouse::N_IN_TRANSFER_BYTES) };
+                    mouse.driver.call_callback_at(address, buffer);
+                }
+                Some(DriverKind::Keyboard) => {
+                    assert_eq!(
+                        normal.trb_transfer_length(),
+                        keyboard::N_IN_TRANSFER_BYTES as u32
+                    );
+                    assert_eq!(8, keyboard::N_IN_TRANSFER_BYTES as u32);
+                    let address = {
+                        let device = self.usb_device_host_at(slot_id as usize);
+                        let device = kernel_lib::lock!(device);
+                        device.as_ref().unwrap().device_address()
+                    };
+                    let mut keyboard = kernel_lib::lock!(class_driver_manager.keyboard());
+                    let buffer =
+                        unsafe { core::slice::from_raw_parts(buffer, mouse::N_IN_TRANSFER_BYTES) };
+                    keyboard.driver.call_callback_at(address, buffer);
+                }
                 None => todo!(),
             }
-            // let mut registers = kernel_lib::lock!(self.registers);
-            // registers
-            //     .doorbell
-            //     .update_volatile_at(slot_id as usize, |r| {
-            //         r.set_doorbell_target(dci);
-            //         r.set_doorbell_stream_id(0);
-            //     });
-        }
+            // flip bit
+            let flipped_normal = {
+                let mut normal = normal;
+                if normal.cycle_bit() {
+                    normal.set_cycle_bit();
+                } else {
+                    normal.clear_cycle_bit();
+                }
+                normal
+            };
+            unsafe { trb_pointer.write_volatile(TrbRaw::new_unchecked(flipped_normal.into_raw())) };
 
-        todo!()
+            {
+                let mut registers = kernel_lib::lock!(self.registers);
+                registers
+                    .doorbell
+                    .update_volatile_at(slot_id as usize, |r| {
+                        r.set_doorbell_target(dci);
+                        r.set_doorbell_stream_id(0);
+                    });
+            }
+        } else {
+            todo!()
+        }
     }
 }
 
