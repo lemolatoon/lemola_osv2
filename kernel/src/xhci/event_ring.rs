@@ -186,7 +186,12 @@ impl EventRing<&'static GlobalAllocator> {
         log::debug!("next dequeue ptr: {:p}", next);
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
+            erdp.clear_event_handler_busy();
         });
+        log::info!(
+            "EHB: {:?}",
+            interrupter.erdp.read_volatile().event_handler_busy()
+        );
         event::Allowed::try_from(popped.into_raw()).map_err(TrbRaw::new_unchecked)
     }
 

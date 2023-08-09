@@ -30,7 +30,9 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     pixcel_writer.fill_rect(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white());
     println!("global WRITER initialized?");
     writeln!(
-        kernel_lib::lock!(kernel::graphics::WRITER.0).get_mut().unwrap(),
+        kernel_lib::lock!(kernel::graphics::WRITER.0)
+            .get_mut()
+            .unwrap(),
         "Hello lemola os!!!"
     )
     .unwrap();
@@ -74,6 +76,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     executor.spawn(tick_mouse_task);
     // executor.spawn(tick_keyboard_task);
 
+    x86_64::instructions::interrupts::enable();
     executor.run();
     // loop {
     //     // count += 1;

@@ -63,8 +63,14 @@ impl<T> Mutex<T> {
     }
 
     pub fn print_file_line(&self) {
-        let info = self.file.get().iter().zip(self.line.get().iter()).filter_map(|(f, l)| f.and_then(|f| l.and_then(|l| Some((f, l))))).collect::<Vec<_>>();
-        log::info!("{:?}", info);
+        let info = self
+            .file
+            .get()
+            .iter()
+            .zip(self.line.get().iter())
+            .filter_map(|(f, l)| f.and_then(|f| l.and_then(|l| Some((f, l)))))
+            .collect::<Vec<_>>();
+        log::debug!("{:?}", info);
     }
 
     pub fn is_locked(&self) -> bool {
