@@ -866,7 +866,7 @@ where
                     };
                     let mut keyboard = kernel_lib::lock!(class_driver_manager.keyboard());
                     let buffer =
-                        unsafe { core::slice::from_raw_parts(buffer, mouse::N_IN_TRANSFER_BYTES) };
+                        unsafe { core::slice::from_raw_parts(buffer, keyboard::N_IN_TRANSFER_BYTES) };
                     keyboard.driver.call_callback_at(address, buffer);
                 }
                 None => todo!(),
