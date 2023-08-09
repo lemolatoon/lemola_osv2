@@ -3,6 +3,7 @@ use core::{alloc::Allocator, cmp};
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
 use kernel_lib::mutex::Mutex;
+use usb_host::Direction;
 use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
@@ -808,7 +809,7 @@ where
             }
         };
         let slot_id = event.slot_id();
-        let dci = event.endpoint_id();
+        let dci = DeviceContextIndex::checked_new(event.endpoint_id());
 
         let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
         let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
@@ -858,24 +859,21 @@ where
                 }
                 None => todo!(),
             }
-            // flip bit
-            let flipped_normal = {
-                let mut normal = normal;
-                if normal.cycle_bit() {
-                    normal.set_cycle_bit();
-                } else {
-                    normal.clear_cycle_bit();
-                }
-                normal
-            };
-            unsafe { trb_pointer.write_volatile(TrbRaw::new_unchecked(flipped_normal.into_raw())) };
+            {
+                // for debug printing
+                let device = self.usb_device_host_at(slot_id as usize);
+                let mut device = kernel_lib::lock!(device);
+                let device = device.as_mut().unwrap();
+                let transfer_ring = device.transfer_ring_at_mut(dci).as_mut().unwrap();
+                transfer_ring.flip_cycle_bit_at(trb_pointer as u64);
+            }
 
             {
                 let mut registers = kernel_lib::lock!(self.registers);
                 registers
                     .doorbell
                     .update_volatile_at(slot_id as usize, |r| {
-                        r.set_doorbell_target(dci);
+                        r.set_doorbell_target(dci.address());
                         r.set_doorbell_stream_id(0);
                     });
             }

@@ -68,9 +68,48 @@ impl TransferRing<&'static GlobalAllocator> {
         }
     }
 
+    pub fn flip_cycle_bit_at(&mut self, trb_pointer: u64) {
+        log::debug!(
+            "writing trb_ptr: {:p} in [{:p} - {:p}]",
+            trb_pointer as *const TrbRaw,
+            self.trb_buffer.as_ptr(),
+            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
+        );
+        log::debug!("buffer_range: {:x?}", self.buffer_range());
+        let write_index = self
+            .buffer_range()
+            .position(|i| i == trb_pointer as usize)
+            .unwrap()
+            / core::mem::size_of::<TrbRaw>();
+        log::debug!("write_index: {}", write_index);
+        assert_ne!(write_index, self.trb_buffer.len() - 1);
+        self.write_index = write_index;
+        self.trb_buffer[write_index].toggle_cycle_bit();
+
+        self.write_index += 1;
+        if self.write_index == self.trb_buffer.len() - 1 {
+            log::debug!("end of the ring");
+            // reached end of the ring
+            let mut link = trb::Link::new();
+            link.set_ring_segment_pointer(self.trb_buffer.as_ptr() as u64);
+            link.set_toggle_cycle();
+            if self.cycle_bit {
+                link.set_cycle_bit();
+            } else {
+                link.clear_cycle_bit();
+            }
+            self.trb_buffer[self.write_index]
+                .write_in_order(TrbRaw::new_unchecked(link.into_raw()));
+
+            self.write_index = 0;
+            self.toggle_cycle_bit();
+        }
+        self.dump_state();
+    }
+
     pub fn buffer_range(&self) -> core::ops::Range<usize> {
-        let base_ptr = self.buffer_ptr() as *const TrbRaw as usize;
-        base_ptr..(base_ptr + self.buffer_len())
+        let base_ptr = self.buffer_ptr() as *const TrbRaw;
+        base_ptr as usize..(unsafe { base_ptr.add(self.buffer_len()) } as usize)
     }
 
     pub fn cycle_bit(&self) -> bool {
