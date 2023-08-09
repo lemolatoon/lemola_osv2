@@ -360,8 +360,7 @@ impl<
                 let EndpointInfo {
                     interface_num,
                     endpoint,
-                } = (self.endpoint_searcher)(config_buf).expect("no boot keyboard found");
-                log::info!("Boot keyboard found on {:?}", endpoint);
+                } = (self.endpoint_searcher)(config_buf).expect("no interface found");
 
                 log::debug!(
                     "dci: {}",
@@ -898,7 +897,7 @@ where
             }
         }
         {
-            let keyboard = kernel_lib::lock!(self.mouse);
+            let keyboard = kernel_lib::lock!(self.keyboard);
             if let Some(slot) = keyboard.slot_id {
                 if slot == slot_id {
                     return Some(DriverKind::Keyboard);

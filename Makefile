@@ -37,12 +37,12 @@ run: disk.img
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw,readonly \
 		-drive file=disk.img,format=raw \
 		-device nec-usb-xhci,id=xhci \
+		-device usb-kbd \
  		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
 		-no-reboot \
 		-no-shutdown \
 		-monitor stdio
-#		-device usb-kbd 
 # for serial port
 # telnet localhost 5555
 

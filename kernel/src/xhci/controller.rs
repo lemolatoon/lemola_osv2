@@ -164,6 +164,11 @@ where
         log::debug!("[XHCI] xhc controller starts running!!");
     }
 
+    pub fn pending_already_popped_queue(&self) -> bool {
+        let event_ring = kernel_lib::lock!(self.event_ring);
+        event_ring.pending_already_popped_queue()
+    }
+
     pub fn pending_event(&self) -> bool {
         let mut registers = kernel_lib::lock!(self.registers);
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
@@ -183,6 +188,23 @@ where
         true
     }
 
+    pub async fn process_once_received<MFF, KFF>(
+        &self,
+        class_driver_manager: &ClassDriverManager<MFF, KFF>,
+    ) where
+        MFF: Fn(u8, &[u8]),
+        KFF: Fn(u8, &[u8]),
+    {
+        let trb = {
+            let mut event_ring = kernel_lib::lock!(self.event_ring);
+            event_ring.pop_already_popped()
+        };
+        if let Some(trb) = trb {
+            self.process_event_ring_event(trb, class_driver_manager)
+                .await;
+        }
+    }
+
     pub async fn process_event<MFF, KFF>(&self, class_driver_manager: &ClassDriverManager<MFF, KFF>)
     where
         MFF: Fn(u8, &[u8]),
@@ -200,13 +222,6 @@ where
         let mut event_ring = kernel_lib::lock!(self.event_ring);
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
-            if let Some(trb) = event_ring.pop_already_popped() {
-                drop(event_ring);
-                drop(registers);
-                self.process_event_ring_event(trb, class_driver_manager)
-                    .await;
-                return;
-            }
             return;
         }
         log::debug!("[XHCI] EventRing received");
@@ -248,7 +263,10 @@ where
             }
             event::Allowed::BandwidthRequest(_) => todo!(),
             event::Allowed::Doorbell(_) => todo!(),
-            event::Allowed::HostController(_) => todo!(),
+            event::Allowed::HostController(host_controller) => {
+                log::warn!("ignoring... {:?}", host_controller);
+                return;
+            }
             event::Allowed::DeviceNotification(_) => todo!(),
             event::Allowed::MfindexWrap(_) => todo!(),
         }
@@ -841,11 +859,6 @@ where
                     mouse.driver.call_callback_at(address, buffer);
                 }
                 Some(DriverKind::Keyboard) => {
-                    assert_eq!(
-                        normal.trb_transfer_length(),
-                        keyboard::N_IN_TRANSFER_BYTES as u32
-                    );
-                    assert_eq!(8, keyboard::N_IN_TRANSFER_BYTES as u32);
                     let address = {
                         let device = self.usb_device_host_at(slot_id as usize);
                         let device = kernel_lib::lock!(device);

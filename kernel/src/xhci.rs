@@ -37,6 +37,9 @@ pub async fn poll_forever<MF, KF>(
 {
     loop {
         {
+            while controller.pending_already_popped_queue() {
+                controller.process_once_received(class_driver_manager).await;
+            }
             while controller.pending_event() {
                 controller.process_event(class_driver_manager).await;
             }

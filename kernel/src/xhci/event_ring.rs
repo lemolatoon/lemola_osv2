@@ -146,6 +146,10 @@ impl EventRing<&'static GlobalAllocator> {
         }
     }
 
+    pub fn pending_already_popped_queue(&self) -> bool {
+        !self.popped.is_empty()
+    }
+
     pub fn cycle_bit(&self) -> bool {
         self.cycle_bit
     }

@@ -21,7 +21,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
-        class_driver::mouse,
+        class_driver::{keyboard, mouse},
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
         traits::AsyncUSBHost,
@@ -264,16 +264,30 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 }
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let _address = self.device_address();
-                log::warn!("boot keyboard interface ignored");
-                // class_drivers
-                //     .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                //     .unwrap();
-                // class_drivers
-                //     .keyboard()
-                //     .1
-                //     .tick_until_running_state(self)
-                //     .unwrap();
+                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
+                let address = self.device_address();
+                log::info!("add keyboard device");
+                class_drivers
+                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                    .unwrap();
+                {
+                    let mut driver_info = kernel_lib::lock!(class_drivers.keyboard());
+                    driver_info.driver.tick_until_running_state(self).unwrap();
+                    let ep = driver_info.driver.endpoints_mut(address)[0]
+                        .as_mut()
+                        .unwrap();
+                    await_sync!(self.init_transfer_ring_for_interrupt_at(
+                        ep,
+                        endpoint_descriptor.as_ref().unwrap()
+                    ))
+                    .unwrap();
+                };
+                let transfer_ring = self
+                    .transfer_ring_at_mut(dci)
+                    .as_mut()
+                    .expect("transfer ring not allocated")
+                    .as_mut();
+                transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
             }
             if let Some(_mouse_interface) = mouse_interface {
                 let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
@@ -281,7 +295,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 class_drivers
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-                log::debug!("before lock mouse");
                 {
                     let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
                     driver_info.driver.tick_until_running_state(self).unwrap();
