@@ -317,7 +317,7 @@ impl<'a> Iterator for MsiCapabilityIterator<'a> {
         }
         log::debug!("reading msi cap at 0x{:x}", self.current_cap_addr);
         let mut cap = unsafe { MsiCapability::new(self.device, self.current_cap_addr) };
-        while !(cap.capability_id() == 0x05) {
+        while cap.capability_id() != 0x05 {
             // MSIでない
             log::debug!("not msi cap: {:x?} @ {:x}", &cap, self.current_cap_addr);
             self.current_cap_addr = cap.next_pointer();

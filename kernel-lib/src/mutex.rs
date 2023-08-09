@@ -30,7 +30,7 @@ impl<T> Mutex<T> {
     pub fn store_file_line(&self, file: &'static str, line: u32) {
         let file_head_ptr = self.file.as_ptr() as *mut Option<&'static str>;
         for index in 0..BUF_LEN {
-            let ptr = unsafe { file_head_ptr.offset(index as isize) };
+            let ptr = unsafe { file_head_ptr.add(index) };
             if unsafe { ptr.read() }.is_none() {
                 unsafe { ptr.write(Some(file)) };
                 break;
@@ -39,7 +39,7 @@ impl<T> Mutex<T> {
 
         let line_head_ptr = self.line.as_ptr() as *mut Option<_>;
         for index in 0..BUF_LEN {
-            let ptr = unsafe { line_head_ptr.offset(index as isize) };
+            let ptr = unsafe { line_head_ptr.add(index) };
             if unsafe { ptr.read() }.is_none() {
                 unsafe { ptr.write(Some(line)) };
                 break;

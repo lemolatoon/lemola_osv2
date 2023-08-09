@@ -1,16 +1,10 @@
 use core::ffi::c_void;
 
-use kernel_lib::{futures::yield_pending, mutex::Mutex};
+use kernel_lib::futures::yield_pending;
 
 use crate::{
-    alloc::alloc::GlobalAllocator,
-    interrupts::InterruptVector,
-    memory::MemoryMapper,
-    pci, serial_println,
-    usb::class_driver::{
-        callbacks::{self, CallbackType},
-        ClassDriverManager,
-    },
+    alloc::alloc::GlobalAllocator, interrupts::InterruptVector, memory::MemoryMapper, pci,
+    serial_println, usb::class_driver::ClassDriverManager,
 };
 
 use self::controller::XhciController;
@@ -132,8 +126,7 @@ pub fn init_xhci_controller() -> Controller {
     let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
 
     // bootstrap processor's id
-    let bsp_local_apic_id: u8 =
-        (unsafe { (0xfee00020 as *mut u32).read_volatile() as u32 } >> 24) as u8;
+    let bsp_local_apic_id: u8 = (unsafe { (0xfee00020 as *mut u32).read_volatile() } >> 24) as u8;
     pci::configure_msi_fixed_destination(
         xhci_device,
         bsp_local_apic_id,
@@ -145,7 +138,7 @@ pub fn init_xhci_controller() -> Controller {
 
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
     let memory_mapper = crate::memory::MemoryMapper::new();
-    let mut controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
+    let controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
     log::info!("xhc initialized");
     controller.run();
 

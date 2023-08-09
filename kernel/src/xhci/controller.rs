@@ -3,7 +3,6 @@ use core::{alloc::Allocator, cmp};
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
 use kernel_lib::mutex::Mutex;
-use usb_host::Direction;
 use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
@@ -895,7 +894,7 @@ macro_rules! gen_tick {
             KF: Fn(u8, &[u8]),
         {
             use usb_host::Driver;
-            let mut driver = kernel_lib::lock!(class_driver_manager.$device());
+            let driver = kernel_lib::lock!(class_driver_manager.$device());
             if let Some(slot_id) = driver.slot_id {
                 let device = self.device_manager.device_by_slot_id(slot_id);
                 drop(driver);

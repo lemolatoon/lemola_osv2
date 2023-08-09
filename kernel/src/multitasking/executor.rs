@@ -3,7 +3,7 @@ extern crate alloc;
 use core::task::Context;
 
 use super::task;
-use alloc::collections::{BinaryHeap, VecDeque};
+use alloc::collections::VecDeque;
 use kernel_lib::futures::dummy_waker;
 
 pub struct Executor {

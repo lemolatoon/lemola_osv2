@@ -534,7 +534,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         ep: &mut (dyn usb_host::Endpoint + Send + Sync),
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
-        use xhci::context::InputHandler;
         if self.descriptors.is_none() {
             self.request_config_descriptor_and_rest().await;
         }
