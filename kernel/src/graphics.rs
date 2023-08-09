@@ -300,6 +300,13 @@ macro_rules! print {
 }
 
 #[macro_export]
+macro_rules! print_and_flush {
+    ($($arg:tt)*) => {{
+        $crate::graphics::_print_and_flush(format_args!($($arg)*));
+    }};
+}
+
+#[macro_export]
 macro_rules! println {
     () => ($crate::print!("\n"));
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
@@ -314,5 +321,16 @@ pub fn _print(args: fmt::Arguments) {
             .expect("WRITER NOT INITIALIZED")
             .write_fmt(args)
             .unwrap();
+    });
+}
+
+#[doc(hidden)]
+pub fn _print_and_flush(args: fmt::Arguments) {
+    use core::fmt::Write;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut writer = kernel_lib::lock!(WRITER.0);
+        let writer = writer.get_mut().expect("WRITER NOT INITIALIZED");
+        writer.write_fmt(args).unwrap();
+        writer.flush();
     });
 }

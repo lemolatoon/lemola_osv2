@@ -82,11 +82,19 @@ impl<T> Mutex<T> {
         self.dump_state_if_locked();
         self.inner.try_lock()
     }
+
+    pub fn _lock_raw(&self) -> MutexGuard<T> {
+        self.inner.lock()
+    }
 }
 
 #[macro_export]
 macro_rules! lock {
+    // switch implementation if you analyze deadlock
+    // ($mutex:expr) => {
+    //     $mutex.lock(file!(), line!())
+    // };
     ($mutex:expr) => {
-        $mutex.lock(file!(), line!())
+        $mutex._lock_raw()
     };
 }
