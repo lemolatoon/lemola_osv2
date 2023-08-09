@@ -1,9 +1,9 @@
+use crate::mutex::Mutex;
 use crate::Writer;
 use core::fmt;
 use core::fmt::Write;
 use log;
 use once_cell::unsync::OnceCell;
-use crate::mutex::Mutex;
 
 pub struct DecoratedLog<'writer, 'a, W: fmt::Write> {
     writer: &'writer mut W,

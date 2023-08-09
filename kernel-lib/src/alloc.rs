@@ -4,8 +4,8 @@ use core::{
 };
 
 extern crate alloc;
-use alloc::boxed::Box;
 use crate::mutex::Mutex;
+use alloc::boxed::Box;
 
 struct FixedLengthAllocatorInner<const SIZE: usize> {
     heap: [u8; SIZE],

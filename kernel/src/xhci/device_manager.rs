@@ -52,10 +52,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
     }
 
     pub fn get_device_contexts_head_ptr(&mut self) -> usize {
-        kernel_lib::lock!(self.device_context_array
-            .device_contexts
-        )
-            .as_mut_ptr() as usize
+        kernel_lib::lock!(self.device_context_array.device_contexts).as_mut_ptr() as usize
     }
 
     pub fn allocate_device(
@@ -71,7 +68,6 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
             );
             panic!("slot_id is out of range");
         }
-
 
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
@@ -110,13 +106,12 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
             let mut device_context_info =
                 kernel_lib::lock!(self.device_context_array.device_context_infos[slot_id]);
             let device_context_info = device_context_info.as_mut().unwrap();
-            &*device_context_info.device_context
-            as *const DeviceContextWrapper as *mut Device32Byte
-            as Device32BytePtr
+            &*device_context_info.device_context as *const DeviceContextWrapper as *mut Device32Byte
+                as Device32BytePtr
         };
         let mut device_contexts = kernel_lib::lock!(self.device_context_array.device_contexts);
         device_contexts[slot_id] = device_context_ptr
-        }
+    }
 }
 
 #[derive(Debug)]

@@ -9,6 +9,7 @@ use xhci::{
     accessor::{marker::ReadWrite, Mapper},
     registers::runtime::Interrupter,
     ring::trb::{self, event},
+    Registers,
 };
 
 use crate::{
@@ -197,12 +198,12 @@ impl EventRing<&'static GlobalAllocator> {
 
     pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        registers: Arc<Mutex<Registers<M>>>,
         slot_id: u8,
     ) -> trb::event::TransferEvent {
         TransferEventFuture {
             event_ring,
-            interrupter,
+            registers,
             wait_on: TransferEventWaitKind::SlotId(slot_id),
         }
         .await
@@ -210,13 +211,13 @@ impl EventRing<&'static GlobalAllocator> {
 
     pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        registers: Arc<Mutex<Registers<M>>>,
         trb_pointer: u64,
     ) -> trb::event::TransferEvent {
         log::debug!("wait on trb: 0x{:x}", trb_pointer);
         TransferEventFuture {
             event_ring,
-            interrupter,
+            registers,
             wait_on: TransferEventWaitKind::TrbPtr(trb_pointer),
         }
         .await
@@ -236,52 +237,67 @@ impl EventRing<&'static GlobalAllocator> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 enum TransferEventWaitKind {
     SlotId(u8),
     TrbPtr(u64),
 }
 
-struct TransferEventFuture<'a, 'b, M: Mapper + Clone + Send + Sync> {
+struct TransferEventFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-    pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+    pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: TransferEventWaitKind,
 }
 
-impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<'a, 'b, M> {
+impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     type Output = trb::event::TransferEvent;
 
     fn poll(
         self: core::pin::Pin<&mut Self>,
         _cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
-        // FIXME: this is safe because called member methods does not move them, but their must be a better way
-        let Self {
-            interrupter,
-            event_ring,
-            wait_on,
-        } = unsafe { self.get_unchecked_mut() };
-        let event_ring_trb = unsafe {
-            (interrupter
+        let registers = Arc::clone(&self.registers);
+        let event_ring = Arc::clone(&self.event_ring);
+        let wait_on = self.wait_on;
+        let event_ring_dequeue_pointer = {
+            let mut registers = kernel_lib::lock!(registers);
+            let interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            interrupter
                 .erdp
                 .read_volatile()
-                .event_ring_dequeue_pointer() as *const trb::Link)
+                .event_ring_dequeue_pointer() as *const trb::Link
+        };
+        let event_ring_trb = unsafe {
+            event_ring_dequeue_pointer
                 .read_volatile()
         };
-        let mut event_ring = kernel_lib::lock!(event_ring);
-        if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
+        let event_ring_cycle_bit = {
+            let event_ring = kernel_lib::lock!(event_ring);
+            event_ring.cycle_bit()
+        };
+        if event_ring_trb.cycle_bit() != event_ring_cycle_bit {
             // EventRing does not have front
             return Poll::Pending;
         }
+        let popped_trb = {
+            let mut registers = kernel_lib::lock!(registers);
+            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            let mut event_ring = kernel_lib::lock!(event_ring);
+            event_ring.pop(&mut interrupter)
+        };
         match wait_on {
-            TransferEventWaitKind::SlotId(slot_id) => match event_ring.pop(interrupter) {
-                Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == *slot_id => {
+            TransferEventWaitKind::SlotId(slot_id) => match popped_trb {
+                Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == slot_id => {
                     log::debug!("got event: {:x?}", event);
                     Poll::Ready(event)
                 }
                 Ok(trb) => {
                     // EventRing does not have front
                     log::warn!("ignoring trb: {:?}", trb);
-                    event_ring.push(trb);
+                    {
+                        let mut event_ring = kernel_lib::lock!(event_ring);
+                        event_ring.push(trb);
+                    }
                     Poll::Pending
                 }
                 Err(trb) => {
@@ -290,15 +306,18 @@ impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<'a,
                 }
             },
             TransferEventWaitKind::TrbPtr(ptr) => {
-                match event_ring.pop(interrupter) {
-                    Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
+                match popped_trb {
+                    Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == ptr => {
                         log::debug!("got event: {:?}", event);
                         Poll::Ready(event)
                     }
                     Ok(trb) => {
                         // EventRing does not have front
                         log::warn!("ignoring trb: {:?}", trb);
-                        event_ring.push(trb);
+                        {
+                            let mut event_ring = kernel_lib::lock!(event_ring);
+                            event_ring.push(trb);
+                        }
                         Poll::Pending
                     }
                     Err(trb) => {

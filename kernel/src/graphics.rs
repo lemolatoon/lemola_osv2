@@ -1,12 +1,12 @@
 use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
+use kernel_lib::mutex::Mutex;
 use kernel_lib::{
     logger::{CharWriter, DecoratedLog},
     AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,
 };
 use once_cell::unsync::OnceCell;
-use kernel_lib::mutex::Mutex;
 
 use crate::serial_print;
 
@@ -308,10 +308,11 @@ macro_rules! println {
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    kernel_lib::lock!(WRITER
-        .0)
-        .get_mut()
-        .expect("WRITER NOT INITIALIZED")
-        .write_fmt(args)
-        .unwrap();
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        kernel_lib::lock!(WRITER.0)
+            .get_mut()
+            .expect("WRITER NOT INITIALIZED")
+            .write_fmt(args)
+            .unwrap();
+    });
 }

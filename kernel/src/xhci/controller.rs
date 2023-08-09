@@ -15,12 +15,12 @@ use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
     usb::{
-        class_driver::ClassDriverManager,
+        class_driver::{ClassDriverManager, DriverKind},
         device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
     },
     xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
-use spin::{MutexGuard};
+use spin::MutexGuard;
 
 use super::{
     device_manager::DeviceManager,
@@ -237,7 +237,7 @@ where
     {
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
-                self.process_transfer_event(transfer_event);
+                self.process_transfer_event(transfer_event, class_driver_manager);
             }
             event::Allowed::CommandCompletion(command_completion) => {
                 self.process_command_completion_event(command_completion, class_driver_manager)
@@ -778,7 +778,13 @@ where
         }
     }
 
-    fn process_transfer_event(&self, event: trb::event::TransferEvent) {
+    fn process_transfer_event<MFF, KFF>(&self, event: trb::event::TransferEvent,
+        class_driver_manager: &ClassDriverManager<MFF, KFF>,
+     )
+     where 
+        MFF: Fn(u8, &[u8]),
+        KFF: Fn(u8, &[u8]),
+      {
         log::debug!("TransferEvent received: {:?}", &event);
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
@@ -803,9 +809,6 @@ where
         let slot_id = event.slot_id();
         let dci = event.endpoint_id();
 
-        let device = self.device_manager.device_by_slot_id(slot_id as usize);
-        let mut device = kernel_lib::lock!(device);
-        let device = device.as_mut().unwrap();
 
         let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
         let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
@@ -814,19 +817,24 @@ where
             //     .transfer_ring_at_mut(DeviceContextIndex::checked_new(dci))
             //     .as_mut()
             //     .unwrap();
-            let mut registers = kernel_lib::lock!(self.registers);
-            registers
-                .doorbell
-                .update_volatile_at(slot_id as usize, |r| {
-                    r.set_doorbell_target(dci);
-                    r.set_doorbell_stream_id(0);
-                });
+
+            // TODO: use appropriate millis
+            let driver_kind = class_driver_manager.driver_kind(slot_id as usize);
+            match driver_kind {
+                Some(DriverKind::Mouse) => todo!("mouse"),
+                Some(DriverKind::Keyboard) => todo!("keyboard"),
+                None => todo!(),
+            }
+            // let mut registers = kernel_lib::lock!(self.registers);
+            // registers
+            //     .doorbell
+            //     .update_volatile_at(slot_id as usize, |r| {
+            //         r.set_doorbell_target(dci);
+            //         r.set_doorbell_stream_id(0);
+            //     });
         }
-        // TODO: use appropriate millis
-        // self.class_driver_manager
-        //     .tick_at(slot_id as usize, 100, device)
-        //     .unwrap();
-        todo!();
+
+        todo!()
     }
 }
 

@@ -823,6 +823,12 @@ pub struct DriverInfo<T: AsyncDriver> {
     pub driver: T,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum DriverKind {
+    Mouse,
+    Keyboard,
+}
+
 #[derive(Debug)]
 pub struct ClassDriverManager<MF, KF>
 where
@@ -872,34 +878,27 @@ where
     //     Ok(())
     // }
 
-    // pub fn driver_at(&mut self, slot_id: usize) -> Mutex<&mut dyn Driver> {
-    //     let mouse = self.mouse.lock();
-    //     if let Some(slot) = mouse.slot_id {
-    //         if slot == slot_id {
-    //             return Some(&mut self.mouse.1);
-    //         }
-    //     }
-    //     if let Some(slot) = self.keyboard.0 {
-    //         if slot == slot_id {
-    //             return Some(&mut self.keyboard.1);
-    //         }
-    //     }
-    //     None
-    // }
+    pub fn driver_kind(&self, slot_id: usize) -> Option<DriverKind> {
+        {
+            let mouse = kernel_lib::lock!(self.mouse);
+            if let Some(slot) = mouse.slot_id {
+                if slot == slot_id {
+                    return Some(DriverKind::Mouse);
+                }
+            }
+        }
+        {
+            let keyboard = kernel_lib::lock!(self.mouse);
+            if let Some(slot) = keyboard.slot_id {
+                if slot == slot_id {
+                    return Some(DriverKind::Keyboard);
+                }
+            }
+        }
 
-    pub fn tick_at(
-        &mut self,
-        slot_id: usize,
-        millis: usize,
-        host: &mut dyn usb_host::USBHost,
-    ) -> Result<(), DriverError> {
-        // if let Some(driver) = self.driver_at(slot_id) {
-        //     driver.tick(millis, host)?;
-        // }
-
-        // Ok(())
-        unimplemented!()
+        None
     }
+
 
     pub fn mouse(&self) -> &Mutex<DriverInfo<MouseDriver<MF>>> {
         &self.mouse

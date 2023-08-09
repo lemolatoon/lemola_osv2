@@ -47,7 +47,10 @@ impl PendingOnceFuture {
 impl Future for PendingOnceFuture {
     type Output = ();
 
-    fn poll(mut self: core::pin::Pin<&mut Self>, _: &mut core::task::Context) -> core::task::Poll<()> {
+    fn poll(
+        mut self: core::pin::Pin<&mut Self>,
+        _: &mut core::task::Context,
+    ) -> core::task::Poll<()> {
         if self.polled {
             core::task::Poll::Ready(())
         } else {
@@ -60,7 +63,6 @@ impl Future for PendingOnceFuture {
 pub fn yield_pending() -> impl Future<Output = ()> {
     PendingOnceFuture::new()
 }
-
 
 #[cfg(test)]
 mod tests {

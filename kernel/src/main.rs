@@ -74,18 +74,9 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     // let tick_keyboard_task = Task::new(Priority::High, kernel::xhci::tick_keyboard_forever());
     executor.spawn(polling_task);
     executor.spawn(tick_mouse_task);
-    // executor.spawn(tick_keyboard_task);
 
-    x86_64::instructions::interrupts::enable();
+    // x86_64::instructions::interrupts::enable();
     executor.run();
-    // loop {
-    //     // count += 1;
-    //     // x86_64::instructions::interrupts::without_interrupts(|| {
-    //     //     let mut controller = XHC.lock();
-    //     //     let controller = controller.get_mut().unwrap();
-    //     //     controller.tick_mouse(count).unwrap();
-    //     // });
-    // }
 }
 
 #[panic_handler]

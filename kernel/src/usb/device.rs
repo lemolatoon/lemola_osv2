@@ -392,9 +392,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            let mut registers = kernel_lib::lock!(self.registers);
-            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-            EventRing::get_received_transfer_trb_on_trb(event_ring, &mut interrupter, trb_wait_on)
+            EventRing::get_received_transfer_trb_on_trb(event_ring, Arc::clone(&self.registers), trb_wait_on)
                 .await
         };
         match trb.completion_code() {
@@ -572,12 +570,10 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         }
         // TODO: ここでawaitをまたいでlockを保持しているのがdeadlockになっているので、registersをArc::cloneして渡すようにする
         let trb = {
-            let mut registers = kernel_lib::lock!(self.registers);
-            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
             log::debug!("before debug");
             EventRing::get_received_transfer_trb_on_slot(
                 event_ring,
-                &mut interrupter,
+                Arc::clone(&self.registers),
                 slot_id as u8,
             )
             .await

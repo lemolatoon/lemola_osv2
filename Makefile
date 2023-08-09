@@ -39,6 +39,8 @@ run: disk.img
 		-device nec-usb-xhci,id=xhci \
  		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
+		-no-reboot \
+		-no-shutdown \
 		-monitor stdio
 #		-device usb-kbd 
 # for serial port
@@ -54,6 +56,8 @@ run_gdb: disk.img
 		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
 		-monitor stdio \
+		-no-reboot \
+		-no-shutdown \
 		-gdb tcp::12345 -S
 # on gdb
 # target remote localhost:12345

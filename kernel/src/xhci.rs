@@ -1,6 +1,6 @@
-use core::{ffi::c_void};
+use core::ffi::c_void;
 
-use kernel_lib::{mutex::Mutex, futures::yield_pending};
+use kernel_lib::{futures::yield_pending, mutex::Mutex};
 
 use crate::{
     alloc::alloc::GlobalAllocator,
