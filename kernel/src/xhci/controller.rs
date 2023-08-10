@@ -281,7 +281,7 @@ where
     }
 
     pub fn configure_port_at(&self, port_idx: usize) {
-        log::debug!("configure port at: {}", port_idx);
+        log::debug!("configure port at: portsc[{}]", port_idx);
 
         let is_connected = {
             let port_configure_state = kernel_lib::lock!(self.port_configure_state);
@@ -293,7 +293,7 @@ where
     }
 
     pub fn reset_port_at(&self, port_idx: usize) {
-        log::debug!("reset port at: {}", port_idx);
+        log::debug!("reset port at: portsc[{}]", port_idx);
         let is_connected = self.is_port_connected_at(port_idx);
         if !is_connected {
             return;
@@ -317,7 +317,7 @@ where
 
                 port_configure_state.start_configuration_at(port_idx);
                 log::debug!(
-                    "start clear connect status change and port reset port at: {}",
+                    "start clear connect status change and port reset port at: portsc[{}]",
                     port_idx
                 );
                 let mut registers = kernel_lib::lock!(self.registers);
@@ -325,6 +325,15 @@ where
                 port_register_sets.update_volatile_at(port_idx, |port| {
                     // actual reset operation of port
                     port.portsc.clear_connect_status_change();
+                    port.portsc.set_port_power();
+                });
+                while !port_register_sets
+                    .read_volatile_at(port_idx)
+                    .portsc
+                    .port_power()
+                {}
+                port_register_sets.update_volatile_at(port_idx, |port| {
+                    // actual reset operation of port
                     port.portsc.set_port_reset();
                 });
                 while port_register_sets
@@ -342,19 +351,24 @@ where
         let port_register_sets = &mut registers.port_register_set;
         let port_reg_set = port_register_sets.read_volatile_at(port_idx);
         let is_enabled = port_reg_set.portsc.port_enabled_disabled();
+        let current_connect_status = port_reg_set.portsc.current_connect_status();
         let reset_completed = port_reg_set.portsc.connect_status_change();
 
+
         log::debug!(
-            "enable slot: is enabled: {}, is port connect status change: {}",
+            "portsc[{}]: enable slot: is enabled: {}, is port connect status change: {}, current_connect_status: {}",
+            port_idx,
             is_enabled,
-            reset_completed
+            reset_completed,
+            current_connect_status
         );
 
-        if is_enabled && reset_completed {
+
+        if is_enabled /* && reset_completed */ {
             port_register_sets.update_volatile_at(port_idx, |port_reg_set| {
                 // clear port reset change
                 port_reg_set.portsc.clear_port_reset_change();
-                port_reg_set.portsc.set_0_port_reset_change();
+                // port_reg_set.portsc.set_0_port_reset_change();
             });
 
             let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
@@ -465,8 +479,8 @@ where
         KFF: Fn(u8, &[u8]),
     {
         log::debug!(
-            "initialize device at: port_id: {}, slot_id: {}",
-            port_idx + 1,
+            "initialize device at: portsc[{}], slot_id: {}",
+            port_idx,
             slot_id
         );
 
@@ -646,6 +660,7 @@ where
             let port_configure_state = kernel_lib::lock!(self.port_configure_state);
             port_configure_state.port_phase_at(port_idx)
         };
+        log::debug!("port_config_phase: {:?}", port_config_phase);
         match port_config_phase {
             PortConfigPhase::NotConnected => self.reset_port_at(port_idx),
             PortConfigPhase::ResettingPort => {
@@ -653,6 +668,32 @@ where
                 self.enable_slot_at(port_idx);
                 log::debug!("enable slot at {} done", port_idx);
             }
+            PortConfigPhase::WaitingAddressed => {
+                log::debug!("This portidx {} is waiting addressed", port_idx);
+                // for port_idx in 0..self.number_of_ports() {
+                //     let registers = self.registers();
+                //     let port_register_sets = &registers.port_register_set;
+                //     let is_connected = port_register_sets
+                //         .read_volatile_at(port_idx as usize)
+                //         .portsc
+                //         .current_connect_status();
+                //     drop(registers);
+                //     log::debug!("Port {}: is_connected = {}", port_idx, is_connected);
+                //     if is_connected {
+                //         let port_config_phase = {
+                //             let port_configure_state = kernel_lib::lock!(self.port_configure_state);
+                //             port_configure_state.port_phase_at(port_idx as usize)
+                //         };
+                //         if port_config_phase == PortConfigPhase::WaitingAddressed {
+                //             self.reset_port_at(port_idx as usize);
+                //         }
+                //     }
+                // }
+                return;
+            },
+            PortConfigPhase::EnablingSlot => {
+                log::warn!("port[{}]: we received PortStatusChange on EnablingSlot, but decide ignore this", port_idx);
+            },
             state => {
                 log::error!("InvalidPhase: {:?}", state);
                 panic!("InvalidPhase")
