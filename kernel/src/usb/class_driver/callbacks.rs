@@ -5,7 +5,7 @@ use kernel_lib::{
 
 use crate::{
     graphics::get_pixcel_writer,
-    lifegame::{frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
+    lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print, print_and_flush,
     usb::class_driver::keyboard,
 };
@@ -64,6 +64,7 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
     buf[1..]
         .iter()
         .filter_map(|&keycode| {
+            log::debug!("keycode: {}", keycode);
             if keycode == 0 {
                 None
             } else if shifted {
@@ -72,7 +73,15 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
                 Some(KEYCODE_MAP[keycode as usize])
             }
         })
-        .for_each(|c| print_and_flush!("{}", c));
+        .for_each(|c| {
+            log::debug!("char: '{}'", c);
+            if c == ' ' {
+                // flip the RUNNING state
+                log::debug!("flip");
+                lifegame::RUNNING.fetch_not(core::sync::atomic::Ordering::SeqCst);
+            }
+            print_and_flush!("{}", c)
+        });
 }
 
 const BS: char = '\u{08}';

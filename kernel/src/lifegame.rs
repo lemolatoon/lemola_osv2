@@ -1,4 +1,6 @@
 extern crate alloc;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use kernel_lib::futures::yield_pending;
@@ -14,6 +16,9 @@ pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(
 const SIZE: usize = 20;
 const PIXCEL_SIZE: usize = 10;
 const BOARD_POS: Vector2D = Vector2D::new(300, 400);
+
+pub static RUNNING: AtomicBool = AtomicBool::new(false);
+
 pub fn frame_buffer_position_to_board_position(
     frame_buffer_position: Vector2D,
 ) -> Option<(usize, usize)> {
@@ -65,16 +70,22 @@ pub async fn do_lifegame() {
         for _ in 0..100000 {
             {
                 let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
+                let is_empty = queue.is_empty();
                 while let Some((x, y)) = queue.pop_front() {
-                    log::debug!("popped position: {:?}", (x, y));
                     board[y][x] = true;
-                    pretty_print_board(&board);
+                }
+                if !is_empty {
+                    pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
                 }
             }
             yield_pending().await;
         }
-        process::<SIZE>(&mut board);
+        // log::info!("RUNNING: {}", RUNNING.load(core::sync::atomic::Ordering::SeqCst));
+        if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
+            process::<SIZE>(&mut board);
+        }
         pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+        yield_pending().await;
     }
 }
 
