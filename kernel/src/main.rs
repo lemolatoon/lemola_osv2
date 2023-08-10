@@ -68,14 +68,10 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
         kernel::xhci::poll_forever(controller, class_drivers),
     );
     let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
-    // let tick_mouse_task = Task::new(
-    //     Priority::High,
-    //     kernel::xhci::tick_mouse_forever(controller, class_drivers),
-    // );
-    // let tick_keyboard_task = Task::new(Priority::High, kernel::xhci::tick_keyboard_forever());
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
-    // executor.spawn(tick_mouse_task);
+
+    log::set_max_level(log::LevelFilter::Warn);
 
     // x86_64::instructions::interrupts::enable();
     executor.run();

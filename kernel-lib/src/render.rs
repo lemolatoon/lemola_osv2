@@ -73,20 +73,21 @@ pub trait Renderer: PixcelWritable {
         let len = board.len();
         for y in 0..len {
             for x in 0..len {
+                let block_pos = Vector2D::new(pos.x + x * size, pos.y + y * size);
                 if board[y][x] {
                     self.fill_rect(
-                        Vector2D::new(pos.x + x * size, pos.y + y * size),
+                        Vector2D::new(block_pos.x + 1, block_pos.y + 1),
                         Vector2D::new(size - 1, size - 1),
                         color,
                     );
                 } else {
                     self.fill_rect(
-                        Vector2D::new(pos.x + x * size, pos.y + y * size),
+                        Vector2D::new(block_pos.x + 1, block_pos.y + 1),
                         Vector2D::new(size - 1, size - 1),
                         Color::black(),
                     );
                 }
-                self.draw_rect_outline(pos, Vector2D::new(size, size), Color::white());
+                self.draw_rect_outline(block_pos, Vector2D::new(size, size), Color::white());
             }
         }
     }
