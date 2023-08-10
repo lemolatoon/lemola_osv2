@@ -55,13 +55,11 @@ fn ceil(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
 
-const START: usize = 0x01400000;
 unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
     unsafe fn alloc(&self, layout: Layout, boundary: usize) -> *mut u8 {
         let mut allocator = crate::lock!(self.0);
         let start = allocator.next;
-        // let current_ptr = allocator.heap.as_mut_ptr().add(start);
-        let current_ptr =  (0x01400000 as *mut u8).add(start);
+        let current_ptr = allocator.heap.as_mut_ptr().add(start);
         let mut alloc_ptr = ceil(current_ptr as usize, layout.align());
         if boundary > 0 {
             let next_boundary = ceil(alloc_ptr, boundary);
@@ -70,13 +68,11 @@ unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
                 alloc_ptr = next_boundary;
             }
         }
-        let end = alloc_ptr + layout.size() - /* allocator.heap.as_ptr() */ 0x01400000 as usize;
+        let end = alloc_ptr + layout.size() - allocator.heap.as_ptr() as usize;
         if end > SIZE {
-            // panic!("[ALLOCATOR] Out of memory");
-            // #[allow(unreachable_code)]
-            // core::ptr::null_mut()
-            allocator.next = end;
-            alloc_ptr as *mut u8
+            panic!("[ALLOCATOR] Out of memory");
+            #[allow(unreachable_code)]
+            core::ptr::null_mut()
         } else {
             allocator.next = end;
             alloc_ptr as *mut u8

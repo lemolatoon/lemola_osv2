@@ -75,7 +75,7 @@ pub async fn do_lifegame() {
                     board[y][x] = true;
                 }
                 if !is_empty {
-                    pixcel_writer.render_board_at(&board, BOARD_POS, PIXCEL_SIZE, Color::green(), 1);
+                    pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
                 }
             }
             yield_pending().await;
@@ -84,7 +84,7 @@ pub async fn do_lifegame() {
         if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
             process::<SIZE>(&mut board);
         }
-        pixcel_writer.render_board_at(&board, BOARD_POS, PIXCEL_SIZE, Color::green(), 1);
+        pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
         yield_pending().await;
     }
 }

@@ -10,7 +10,7 @@ pub mod mutex;
 pub mod render;
 pub mod shapes;
 pub mod write_to;
-use core::{fmt, mem::ManuallyDrop};
+use core::fmt;
 
 use common::types::PixcelFormat;
 use gen_font::gen_font;
@@ -55,8 +55,7 @@ pub trait PixcelInfo {
 }
 
 pub trait PixcelWritable {
-    fn write_at(&self, x: usize, y: usize, color: Color, layer_id: usize);
-    fn flush(&self);
+    fn write(&self, x: usize, y: usize, color: Color);
 }
 
 pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {
@@ -67,9 +66,9 @@ pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {
         for (dy, font) in font.iter().enumerate() {
             for dx in 0..8 {
                 if font & (1 << (7 - dx)) != 0 {
-                    self.write_at(x + dx, y + dy, fg_color, 0);
+                    self.write(x + dx, y + dy, fg_color);
                 } else {
-                    self.write_at(x + dx, y + dy, bg_color, 0);
+                    self.write(x + dx, y + dy, bg_color);
                 }
             }
         }
@@ -174,7 +173,7 @@ impl<'a, const N_ROW: usize, const N_COLUMN: usize> Writer<'a, N_ROW, N_COLUMN> 
         self.position.x = 0;
     }
 
-    pub fn flush(&self) {
+    pub fn flush(&mut self) {
         for y in 0..N_ROW {
             for x in 0..N_COLUMN {
                 self.writer.write_ascii(

@@ -61,54 +61,52 @@ impl AddAssign for Vector2D {
 }
 
 pub trait Renderer: PixcelWritable {
-    fn fill_rect_at(&self, pos: Vector2D, size: Vector2D, color: Color, layer_id: usize) {
+    fn fill_rect(&self, pos: Vector2D, size: Vector2D, color: Color) {
         for y in pos.y..pos.y + size.y {
             for x in pos.x..pos.x + size.x {
-                self.write_at(x, y, color, layer_id);
+                self.write(x, y, color);
             }
         }
     }
 
-    fn render_board_at(&self, board: &Vec<Vec<bool>>, pos: Vector2D, size: usize, color: Color, layer_id: usize) {
+    fn render_board(&self, board: &Vec<Vec<bool>>, pos: Vector2D, size: usize, color: Color) {
         let len = board.len();
         for y in 0..len {
             for x in 0..len {
                 let block_pos = Vector2D::new(pos.x + x * size, pos.y + y * size);
                 if board[y][x] {
-                    self.fill_rect_at(
+                    self.fill_rect(
                         Vector2D::new(block_pos.x + 1, block_pos.y + 1),
                         Vector2D::new(size - 1, size - 1),
                         color,
-                        layer_id
                     );
                 } else {
-                    self.fill_rect_at(
+                    self.fill_rect(
                         Vector2D::new(block_pos.x + 1, block_pos.y + 1),
                         Vector2D::new(size - 1, size - 1),
                         Color::black(),
-                        layer_id
                     );
                 }
-                self.draw_rect_outline_at(block_pos, Vector2D::new(size, size), Color::white(), layer_id);
+                self.draw_rect_outline(block_pos, Vector2D::new(size, size), Color::white());
             }
         }
     }
 
-    fn draw_rect_outline_at(&self, pos: Vector2D, size: Vector2D, color: Color, layer_id: usize) {
+    fn draw_rect_outline(&self, pos: Vector2D, size: Vector2D, color: Color) {
         for x in pos.x..pos.x + size.x {
-            self.write_at(x, pos.y, color, layer_id);
-            self.write_at(x, pos.y + size.y - 1, color, layer_id);
+            self.write(x, pos.y, color);
+            self.write(x, pos.y + size.y - 1, color);
         }
         for y in pos.y..pos.y + size.y {
-            self.write_at(pos.x, y, color, layer_id);
-            self.write_at(pos.x + size.x - 1, y, color, layer_id);
+            self.write(pos.x, y, color);
+            self.write(pos.x + size.x - 1, y, color);
         }
     }
 
-    fn fill_shape_at(&self, pos: Vector2D, shape: &dyn Shape, layer_id: usize) {
+    fn fill_shape(&self, pos: Vector2D, shape: &dyn Shape) {
         for y in 0..shape.get_height() {
             for x in 0..shape.get_width() {
-                self.write_at(pos.x + x, pos.y + y, shape.get_pixel(x, y), layer_id);
+                self.write(pos.x + x, pos.y + y, shape.get_pixel(x, y));
             }
         }
     }
