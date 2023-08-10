@@ -14,8 +14,8 @@ use crate::graphics::get_pixcel_writer;
 pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
 
 const SIZE: usize = 20;
-const PIXCEL_SIZE: usize = 10;
-const BOARD_POS: Vector2D = Vector2D::new(300, 400);
+const PIXCEL_SIZE: usize = 30;
+const BOARD_POS: Vector2D = Vector2D::new(0, 0);
 
 pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
