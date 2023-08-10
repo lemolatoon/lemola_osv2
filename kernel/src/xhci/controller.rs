@@ -354,7 +354,6 @@ where
         let current_connect_status = port_reg_set.portsc.current_connect_status();
         let reset_completed = port_reg_set.portsc.connect_status_change();
 
-
         log::debug!(
             "portsc[{}]: enable slot: is enabled: {}, is port connect status change: {}, current_connect_status: {}",
             port_idx,
@@ -363,8 +362,9 @@ where
             current_connect_status
         );
 
-
-        if is_enabled /* && reset_completed */ {
+        if is_enabled
+        /* && reset_completed */
+        {
             port_register_sets.update_volatile_at(port_idx, |port_reg_set| {
                 // clear port reset change
                 port_reg_set.portsc.clear_port_reset_change();
@@ -690,10 +690,10 @@ where
                 //     }
                 // }
                 return;
-            },
+            }
             PortConfigPhase::EnablingSlot => {
                 log::warn!("port[{}]: we received PortStatusChange on EnablingSlot, but decide ignore this", port_idx);
-            },
+            }
             state => {
                 log::error!("InvalidPhase: {:?}", state);
                 panic!("InvalidPhase")

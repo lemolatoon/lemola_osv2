@@ -14,6 +14,7 @@ pub mod alloc;
 pub mod font;
 pub mod graphics;
 pub mod interrupts;
+pub mod lifegame;
 pub mod memory;
 pub mod multitasking;
 pub mod pci;

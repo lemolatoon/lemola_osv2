@@ -41,6 +41,10 @@ impl Color {
             b: 255,
         }
     }
+
+    pub const fn green() -> Self {
+        Self { r: 0, g: 255, b: 0 }
+    }
 }
 pub trait PixcelInfo {
     fn get_pixcel_format(&self) -> PixcelFormat;

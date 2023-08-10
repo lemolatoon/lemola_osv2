@@ -3,7 +3,12 @@ use kernel_lib::{
     shapes::mouse::MOUSE_CURSOR_SHAPE,
 };
 
-use crate::{graphics::get_pixcel_writer, print, print_and_flush, usb::class_driver::keyboard};
+use crate::{
+    graphics::get_pixcel_writer,
+    lifegame::{frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
+    print, print_and_flush,
+    usb::class_driver::keyboard,
+};
 
 static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(700, 500);
 
@@ -22,6 +27,17 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
     let y_diff = buf[2] as i8;
     log::debug!("{:?}", [x_diff, y_diff]);
+    let left_click = buf[0] & 0b1 != 0;
+    log::debug!("buf: {:?}, clicked: {}", buf, left_click);
+    if left_click {
+        let pos = MOUSE_CURSOR.into_vec();
+        let pos = Vector2D::new(pos.0 as usize, pos.1 as usize);
+        if let Some(pos) = frame_buffer_position_to_board_position(pos) {
+            let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
+            queue.push_back(pos);
+        }
+    }
+
     MOUSE_CURSOR.add(x_diff as isize, y_diff as isize);
     if let Some(pixcel_writer) = get_pixcel_writer() {
         let (mut x, mut y) = MOUSE_CURSOR.into_vec();
