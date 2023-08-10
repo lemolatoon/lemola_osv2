@@ -27,7 +27,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     let arg = unsafe { (*arg).clone() };
     let graphics_info = arg.graphics_info;
     let pixcel_writer = init_graphics(graphics_info);
-    pixcel_writer.fill_rect(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white());
+    pixcel_writer.fill_rect_at(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white(), 1);
     println!("global WRITER initialized?");
     writeln!(
         kernel_lib::lock!(kernel::graphics::WRITER.0)
@@ -43,7 +43,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
 
-    pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
+    pixcel_writer.fill_shape_at(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE, 2);
 
     let controller = init_xhci_controller();
     let class_drivers = kernel::usb::class_driver::ClassDriverManager::new(
@@ -68,8 +68,10 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
         kernel::xhci::poll_forever(controller, class_drivers),
     );
     let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
+    let render_task = Task::new(Priority::Default, kernel::graphics::render());
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
+    executor.spawn(render_task);
 
     log::set_max_level(log::LevelFilter::Warn);
 

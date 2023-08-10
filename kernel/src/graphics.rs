@@ -1,5 +1,10 @@
+extern crate alloc;
 use core::fmt::{self};
+use core::mem::ManuallyDrop;
 
+use alloc::vec::Vec;
+use alloc::vec;
+use bit_field::BitField;
 use common::types::{GraphicsInfo, PixcelFormat};
 use kernel_lib::mutex::Mutex;
 use kernel_lib::{
@@ -8,7 +13,7 @@ use kernel_lib::{
 };
 use once_cell::unsync::OnceCell;
 
-use crate::serial_print;
+use crate::{serial_print, serial_println};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Rgb;
@@ -29,12 +34,13 @@ impl MarkerColor for Bgr {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PixcelWriter<T: MarkerColor> {
     frame_buffer_base: *mut u8,
     pixcels_per_scan_line: usize,
     horizontal_resolution: usize,
     vertical_resolution: usize,
+    layers: Vec<Vec<u32>>,
     _pixcel_format: T,
 }
 
@@ -45,40 +51,48 @@ impl PixcelWriter<Rgb> {
         horizontal_resolution: usize,
         vertical_resolution: usize,
     ) -> Self {
+        serial_println!("bytes: {}", horizontal_resolution * pixcels_per_scan_line * 4);
+        let layers = vec![vec![u32::MAX; horizontal_resolution * pixcels_per_scan_line]; 3];
         Self {
             frame_buffer_base,
             pixcels_per_scan_line,
             horizontal_resolution,
             vertical_resolution,
+            layers,
             _pixcel_format: Rgb,
         }
     }
 
-    pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
-        let offset = offset * 4;
-        unsafe {
-            self.frame_buffer_base.add(offset).write_volatile(color.r);
-            self.frame_buffer_base
-                .add(offset + 1)
-                .write_volatile(color.g);
-            self.frame_buffer_base
-                .add(offset + 2)
-                .write_volatile(color.b);
-        }
+    pub fn write_pixcel_at_offset_at(&self, offset: usize, color: Color, layer_id: usize) {
+
+        let mut pixcel: u32 = 0;
+        pixcel.set_bits(0..8, color.r as u32);
+        pixcel.set_bits(8..16, color.g as u32);
+        pixcel.set_bits(16..24, color.b as u32);
+        // TODO: make this method &mut self
+        unsafe { (&self.layers[layer_id][offset] as *const u32 as *mut u32).write_volatile(pixcel) };
     }
 }
 
 impl PixcelWritable for PixcelWriter<Rgb> {
-    fn write(&self, x: usize, y: usize, color: Color) {
+    fn write_at(&self, x: usize, y: usize, color: Color, layer_id: usize) {
         let offset = self.get_offset(x, y);
-        self.write_pixcel_at_offset(offset, color);
+        self.write_pixcel_at_offset_at(offset, color, layer_id);
+    }
+
+    fn flush(&self) {
+        self.flush_inner();
     }
 }
 
 impl PixcelWritable for PixcelWriter<Bgr> {
-    fn write(&self, x: usize, y: usize, color: Color) {
+    fn write_at(&self, x: usize, y: usize, color: Color, layer_id: usize) {
         let offset = self.get_offset(x, y);
-        self.write_pixcel_at_offset(offset, color);
+        self.write_pixcel_at_offset_at(offset, color, layer_id);
+    }
+
+    fn flush(&self) {
+        self.flush_inner();
     }
 }
 
@@ -89,40 +103,40 @@ impl PixcelWriter<Bgr> {
         horizontal_resolution: usize,
         vertical_resolution: usize,
     ) -> Self {
+        serial_println!("bytes: {}", horizontal_resolution * pixcels_per_scan_line * 4);
+        let layers = vec![vec![u32::MAX; horizontal_resolution * pixcels_per_scan_line ]; 3];
         Self {
             frame_buffer_base,
             pixcels_per_scan_line,
             horizontal_resolution,
             vertical_resolution,
+            layers,
             _pixcel_format: Bgr,
         }
     }
 
-    pub fn write_pixcel_at_offset(&self, offset: usize, color: Color) {
-        let offset = offset * 4;
-        unsafe {
-            self.frame_buffer_base.add(offset).write_volatile(color.b);
-            self.frame_buffer_base
-                .add(offset + 1)
-                .write_volatile(color.g);
-            self.frame_buffer_base
-                .add(offset + 2)
-                .write_volatile(color.r);
-        }
+    pub fn write_pixcel_at_offset_at(&self, offset: usize, color: Color, layer_id: usize) {
+        let mut pixcel: u32 = 0;
+        pixcel.set_bits(0..8, color.b as u32);
+        pixcel.set_bits(8..16, color.g as u32);
+        pixcel.set_bits(16..24, color.r as u32);
+        // TODO: make this method &mut self
+        unsafe { (&self.layers[layer_id][offset] as *const u32 as *mut u32).write_volatile(pixcel) };
     }
 }
 
 pub struct PixcelWriterBuilder;
 
 pub union PixcelWriterUnion {
-    rgb: PixcelWriter<Rgb>,
-    bgr: PixcelWriter<Bgr>,
+    rgb: ManuallyDrop<PixcelWriter<Rgb>>,
+    bgr: ManuallyDrop<PixcelWriter<Bgr>>,
     none: (),
 }
 
 /// Safety: frame_buffer_base is write only.
 unsafe impl<T: MarkerColor> Sync for PixcelWriter<T> {}
 unsafe impl<T: MarkerColor> Send for PixcelWriter<T> {}
+
 
 impl PixcelWriterBuilder {
     pub fn get_writer<'buf>(
@@ -140,9 +154,9 @@ impl PixcelWriterBuilder {
                     graphics_info.horizontal_resolution(),
                     graphics_info.vertical_resolution(),
                 );
-                buf.rgb = pixcel_writer;
+                buf.rgb = ManuallyDrop::new(pixcel_writer);
                 // Safety: buf.rgb is initialized at previous line.
-                unsafe { &buf.rgb }
+                unsafe { core::mem::transmute::<_, &'static PixcelWriter<Rgb>>(&buf.rgb) }
             }
             PixcelFormat::Bgr => {
                 let pixcel_writer = PixcelWriter::<Bgr>::new_raw(
@@ -151,9 +165,9 @@ impl PixcelWriterBuilder {
                     graphics_info.horizontal_resolution(),
                     graphics_info.vertical_resolution(),
                 );
-                buf.bgr = pixcel_writer;
+                buf.bgr = ManuallyDrop::new(pixcel_writer);
                 // Safety: buf.bgr is initialized at previous line.
-                unsafe { &buf.bgr }
+                unsafe { core::mem::transmute::<_, &'static PixcelWriter<Bgr>>(&buf.bgr) }
             }
         }
     }
@@ -187,6 +201,21 @@ where
 {
     fn get_offset(&self, x: usize, y: usize) -> usize {
         y * self.pixcels_per_scan_line + x
+    }
+
+    fn flush_inner(&self) {
+        const BUF_LEN: usize = 10000 * 10000;
+        let mut applied_layers = [0u32; BUF_LEN];
+        for layer in self.layers.iter() {
+            for (i, pixcel) in layer.iter().enumerate() {
+                if *pixcel == u32::MAX {
+                    applied_layers[i] = *pixcel;
+                }
+            }
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping::<u32>(applied_layers.as_ptr(), self.frame_buffer_base as *mut u32, self.layers[0].len());
+        }
     }
 }
 
@@ -292,6 +321,14 @@ pub fn init_logger() {
             log::info!("logger initialized");
         })
         .unwrap();
+}
+
+pub async fn render() {
+    loop {
+        if let Some(pixcel_writer) = get_pixcel_writer() {
+            pixcel_writer.flush();
+        }
+    }
 }
 
 #[macro_export]

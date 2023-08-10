@@ -54,7 +54,7 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
             pixcel_writer.horizontal_resolution(),
             pixcel_writer.vertical_resolution()
         );
-        pixcel_writer.fill_shape(vec, &MOUSE_CURSOR_SHAPE);
+        pixcel_writer.fill_shape_at(vec, &MOUSE_CURSOR_SHAPE, 2);
     };
 }
 

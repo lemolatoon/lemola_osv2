@@ -40,6 +40,7 @@ run: disk.img
 		-device usb-kbd \
  		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
+		-m 2G \
 		-no-reboot \
 		-no-shutdown \
 		-monitor stdio
@@ -55,6 +56,7 @@ run_gdb: disk.img
 		-device usb-kbd \
 		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
+		-m 2G \
 		-monitor stdio \
 		-no-reboot \
 		-no-shutdown \
