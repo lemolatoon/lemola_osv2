@@ -71,9 +71,8 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
 
-    log::set_max_level(log::LevelFilter::Warn);
-
     // x86_64::instructions::interrupts::enable();
+    log::debug!("before executor.run()");
     executor.run();
 }
 

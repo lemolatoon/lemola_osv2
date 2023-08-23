@@ -294,8 +294,24 @@ where
 
     pub fn reset_port_at(&self, port_idx: usize) {
         log::debug!("reset port at: portsc[{}]", port_idx);
+        // current connect status (CCS)
         let is_connected = self.is_port_connected_at(port_idx);
+        // connect status change (CSC)
+        let connect_status_change = {
+            let mut registers = kernel_lib::lock!(self.registers);
+            let port_register_sets = &mut registers.port_register_set;
+            port_register_sets
+                .read_volatile_at(port_idx)
+                .portsc
+                .connect_status_change()
+        };
         if !is_connected {
+            log::debug!("connect status change is not set");
+            return;
+        }
+
+        if !connect_status_change {
+            log::debug!("connect status change is not set");
             return;
         }
 
@@ -323,8 +339,16 @@ where
                 let mut registers = kernel_lib::lock!(self.registers);
                 let port_register_sets = &mut registers.port_register_set;
                 port_register_sets.update_volatile_at(port_idx, |port| {
+                    // prevent clearing rw1c bits
+                    port.portsc.set_0_port_enabled_disabled();
+                    port.portsc.set_0_connect_status_change();
+                    port.portsc.set_0_port_enabled_disabled_change();
+                    port.portsc.set_0_warm_port_reset_change();
+                    port.portsc.set_0_over_current_change();
+                    port.portsc.set_0_port_reset_change();
+                    port.portsc.set_0_port_link_state_change();
+                    port.portsc.set_0_port_config_error_change();
                     // actual reset operation of port
-                    port.portsc.clear_connect_status_change();
                     port.portsc.set_port_power();
                 });
                 while !port_register_sets
@@ -333,6 +357,15 @@ where
                     .port_power()
                 {}
                 port_register_sets.update_volatile_at(port_idx, |port| {
+                    // prevent clearing rw1c bits
+                    port.portsc.set_0_port_enabled_disabled();
+                    port.portsc.set_0_connect_status_change();
+                    port.portsc.set_0_port_enabled_disabled_change();
+                    port.portsc.set_0_warm_port_reset_change();
+                    port.portsc.set_0_over_current_change();
+                    port.portsc.set_0_port_reset_change();
+                    port.portsc.set_0_port_link_state_change();
+                    port.portsc.set_0_port_config_error_change();
                     // actual reset operation of port
                     port.portsc.set_port_reset();
                 });
@@ -342,6 +375,11 @@ where
                     .port_reset()
                 {}
                 log::debug!("[XHCI] port at {} is now reset!", port_idx);
+                log::debug!(
+                    "ports[{}].portsc: {:#x?}",
+                    port_idx,
+                    port_register_sets.read_volatile_at(port_idx).portsc
+                );
             }
         }
     }

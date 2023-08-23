@@ -38,9 +38,11 @@ pub async fn poll_forever<MF, KF>(
     loop {
         {
             while controller.pending_already_popped_queue() {
+                log::debug!("having pending already popped queue");
                 controller.process_once_received(class_driver_manager).await;
             }
             while controller.pending_event() {
+                log::debug!("having pending event");
                 controller.process_event(class_driver_manager).await;
             }
         }
@@ -145,7 +147,7 @@ pub fn init_xhci_controller() -> Controller {
     log::info!("xhc initialized");
     controller.run();
 
-    for port_idx in (0..controller.number_of_ports()).rev() {
+    for port_idx in (0..controller.number_of_ports()) {
         let registers = controller.registers();
         let port_register_sets = &registers.port_register_set;
         let is_connected = port_register_sets

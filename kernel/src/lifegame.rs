@@ -17,7 +17,7 @@ const SIZE: usize = 20;
 const PIXCEL_SIZE: usize = 30;
 const BOARD_POS: Vector2D = Vector2D::new(0, 0);
 
-pub static RUNNING: AtomicBool = AtomicBool::new(false);
+pub static RUNNING: AtomicBool = AtomicBool::new(true);
 
 pub fn frame_buffer_position_to_board_position(
     frame_buffer_position: Vector2D,
