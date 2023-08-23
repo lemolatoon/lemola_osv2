@@ -110,6 +110,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
                 as Device32BytePtr
         };
         let mut device_contexts = kernel_lib::lock!(self.device_context_array.device_contexts);
+        // 7. Load the appropriate (Device Slot ID) entry in the Device Context Base Address Array (5.4.7) with a pointer to the Output Device Context data structure (6.2.1).
         device_contexts[slot_id] = device_context_ptr
     }
 }

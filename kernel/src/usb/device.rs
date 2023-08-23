@@ -106,6 +106,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 [Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>>; 31],
             >(transfer_rings)
         };
+        // 4.3.3 Device Slot Initialization
+        // 4. Allocate and initialize the Transfer Ring for Default Control Endpoint...
         transfer_rings[0] = Some(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE));
         Self {
             registers,
@@ -114,7 +116,10 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             slot_id,
             port_index,
             descriptors: None,
+            // 4.3.3 Device Slot Initialization
+            // 1. Allocate an Input Context ...
             input_context: InputContextWrapper::new(), // 0 filled
+            // 6. Allocate the Output Device Context data structure (6.2.1)...
             device_context: DeviceContextWrapper::new(), // 0 filled
             transfer_rings,
         }
@@ -132,6 +137,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
     pub fn enable_slot_context(&mut self) {
         use xhci::context::InputHandler;
         let control = self.input_context.0.control_mut();
+        // 6.2.5.1 Input Control Context
+        // set A0
         control.set_add_context_flag(0);
     }
 
@@ -142,11 +149,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
     }
 
     pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
+        // 4.3.3 Device Slot Initialization
+        // 3. Initialize the Input Slot Context data structure (6.2.2)
         use xhci::context::InputHandler;
         log::debug!("initialize_slot_context: port_id: {}", port_id);
         let slot_context = self.input_context.0.device_mut().slot_mut();
+        // Route String = Topology defined. (To access a device attached directly to a Root Hub port, the Route String shall equal '0'.)
         slot_context.set_route_string(0);
+        // and the Root Hub Port Number shall indicate the specific Root Hub port to use.
         slot_context.set_root_hub_port_number(port_id);
+        // Context Entries = 1
         slot_context.set_context_entries(1);
         slot_context.set_speed(port_speed);
     }
@@ -191,6 +203,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         transfer_ring_dequeue_pointer: u64,
         max_packet_size: u16,
     ) {
+        // 4.3.3 Device Slot Initialization
+        // 5. Initialize the Input default control Endpoint 0 Context (6.2.3)
         use xhci::context::InputHandler;
         let endpoint_context_0_id = DeviceContextIndex::ep0();
         let endpoint0_context = self
@@ -200,14 +214,23 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             .endpoint_mut(endpoint_context_0_id.address() as usize);
 
         log::debug!("max_packet_size: {}", max_packet_size);
+        // EP Type = Control
         endpoint0_context.set_endpoint_type(EndpointType::Control);
+        // Max Packet Size
         endpoint0_context.set_max_packet_size(max_packet_size);
+        // Max Burst Size = 0
         endpoint0_context.set_max_burst_size(0);
+        // TR Dequeue Pointer = Start address of first segment of the Default Control Endpoint Transfer Ring
         endpoint0_context.set_tr_dequeue_pointer(transfer_ring_dequeue_pointer);
+        // Dequeue Cycle State(DCS) = 1
         endpoint0_context.set_dequeue_cycle_state();
+        // interval = 0
         endpoint0_context.set_interval(0);
+        // Max Primary Streams (MaxPStreams) = 0
         endpoint0_context.set_max_primary_streams(0);
+        // Mult = 0
         endpoint0_context.set_mult(0);
+        // Error Count(CErr) = 3
         endpoint0_context.set_error_count(3);
     }
 

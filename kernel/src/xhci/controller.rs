@@ -431,22 +431,30 @@ where
                 doorbell.set_doorbell_target(0);
                 doorbell.set_doorbell_stream_id(0);
             });
-            log::debug!("end enable slot at");
         }
     }
 
     fn address_device_at(&self, port_index: usize, slot_id: usize) {
+        // 4.3.3 Device Slot Initialization
         log::debug!(
             "address device at: port_index: {}, slot_id: {}",
             port_index,
             slot_id
         );
         let ep0_dci = DeviceContextIndex::ep0();
+
+        // 1. Allocate an Input Context ...
+        // 4. Allocate and initialize the Transfer Ring for Default Control Endpoint...
+        // 6. Allocate the Output Device Context data structure (6.2.1)...
         let device = self.device_manager.allocate_device(port_index, slot_id);
+
         {
             let mut device = kernel_lib::lock!(device);
             let device = device.as_mut().unwrap();
+            // 2. Initialize the Input Control Context(6.2.5.1)
+            // setting the A0
             device.enable_slot_context();
+            // and A1 flags to '1'
             device.enable_endpoint(ep0_dci);
         }
 
@@ -458,6 +466,7 @@ where
         {
             let mut device = kernel_lib::lock!(device);
             let device = device.as_mut().unwrap();
+            // 3. Initialize the Input Slot Context data structure (6.2.2)
             device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed());
 
             let transfer_ring_dequeue_pointer = device
@@ -472,41 +481,26 @@ where
             );
 
             let slot_context = device.slot_context();
+            // todo: check this calculation based on xhci spec
             let max_packet_size = Self::max_packet_size_for_control_pipe(slot_context.speed());
 
+            // 5. Initialize the Input default control Endpoint 0 Context (6.2.3)
             device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
         }
 
+        // 7. Load the appropriate (Device Slot ID) entry in the Device Context Base Address Array (5.4.7) with a pointer to the Output Device Context data structure (6.2.1).
         self.device_manager.load_device_context(slot_id);
+
+        let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+        port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
+
+        // 8. Issue an Address Device Command for Device Slot, ...points to the Input Context data structure described above.
         let input_context_pointer = {
             let mut device = kernel_lib::lock!(device);
             let device = device.as_mut().unwrap();
-
-            let slot_context = device.slot_context();
-            log::debug!("slot context: {:x?}", slot_context.as_ref());
-            log::debug!("slot context at: {:p}", slot_context.as_ref().as_ptr());
-            let endpoint0_context = device.endpoint_context(ep0_dci);
-            log::debug!("ep0 context: {:x?}", endpoint0_context.as_ref());
-            log::debug!("ep0 context: {:p}", endpoint0_context.as_ref().as_ptr());
-
-            let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
-            port_configure_state.port_config_phase[port_index] = PortConfigPhase::AddressingDevice;
-
             &*device.input_context as *const InputContextWrapper as u64
         };
         let mut address_device_command = trb::command::AddressDevice::new();
-        let slot_context_pointer = (input_context_pointer + 32) as *const Slot64Byte;
-        let ep0_context_pointer = (input_context_pointer + 64) as *const Endpoint64Byte;
-        log::debug!("slot context pointer?: {:p}", slot_context_pointer);
-        log::debug!("ep0 context pointer?: {:p}", ep0_context_pointer);
-        unsafe {
-            let slot_context = &*slot_context_pointer;
-            let ep0_context = &*ep0_context_pointer;
-            let slot_context_raw = slot_context.as_ref();
-            let ep0_context_raw = ep0_context.as_ref();
-            log::debug!("slot context: {:x?}", slot_context_raw);
-            log::debug!("ep0 context: {:x?}", ep0_context_raw);
-        }
         log::debug!("input context pointer: {:#x}", input_context_pointer);
         address_device_command.set_input_context_pointer(input_context_pointer);
         address_device_command.set_slot_id(slot_id as u8);
@@ -716,7 +710,6 @@ where
             PortConfigPhase::ResettingPort => {
                 // already called reset_port_at once
                 self.enable_slot_at(port_idx);
-                log::debug!("enable slot at {} done", port_idx);
             }
             PortConfigPhase::WaitingAddressed => {
                 log::debug!("This portidx {} is waiting addressed", port_idx);
