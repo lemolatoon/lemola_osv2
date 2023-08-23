@@ -315,6 +315,27 @@ where
             return;
         }
 
+        let is_enabled = {
+            let mut registers = kernel_lib::lock!(self.registers);
+            let port_register_sets = &mut registers.port_register_set;
+            let portsc = port_register_sets.read_volatile_at(port_idx).portsc;
+            // 4.19.1 Root Hub Port State Machines
+            let flags = (
+                portsc.port_power(),
+                portsc.current_connect_status(),
+                portsc.port_enabled_disabled(),
+                portsc.port_reset(),
+            );
+            log::debug!("{:?}", flags);
+            flags == (true, true, true, false)
+        };
+
+        if is_enabled {
+            log::info!("might be USB3.0 device");
+        } else {
+            log::info!("might be USB2.0 device");
+        }
+
         let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
         match port_configure_state.addressing_port_index {
             Some(_) => {
