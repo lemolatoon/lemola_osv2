@@ -380,6 +380,18 @@ where
                     port_idx,
                     port_register_sets.read_volatile_at(port_idx).portsc
                 );
+                let is_enabled = {
+                    let portsc = port_register_sets.read_volatile_at(port_idx).portsc;
+                    // 4.19.1 Root Hub Port State Machines
+                    let flags = (
+                        portsc.port_power(),
+                        portsc.current_connect_status(),
+                        portsc.port_enabled_disabled(),
+                        portsc.port_reset(),
+                    );
+                    flags == (true, true, true, false)
+                };
+                assert!(is_enabled, "port is not enabled");
             }
         }
     }
