@@ -232,6 +232,10 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         endpoint0_context.set_mult(0);
         // Error Count(CErr) = 3
         endpoint0_context.set_error_count(3);
+
+        // 6.2.3 Endpoint Context
+        // Note: Software shall set Average TRB Length to ‘8’ for control endpoints.
+        endpoint0_context.set_average_trb_length(8);
     }
 
     pub async fn start_initialization<MF, KF>(&mut self, class_drivers: &ClassDriverManager<MF, KF>)
