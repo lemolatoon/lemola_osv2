@@ -147,7 +147,7 @@ pub fn init_xhci_controller() -> Controller {
     log::info!("xhc initialized");
     controller.run();
 
-    for port_idx in 0..controller.number_of_ports() {
+    for port_idx in (0..controller.number_of_ports()).rev() {
         let registers = controller.registers();
         let port_register_sets = &registers.port_register_set;
         let is_connected = port_register_sets

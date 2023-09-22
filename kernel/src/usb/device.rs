@@ -244,7 +244,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         KF: Fn(u8, &[u8]),
     {
         let device_descriptor = self.request_device_descriptor().await;
-        #[cfg(debug)]
         {
             let buffer_len = self
                 .transfer_ring_at(DeviceContextIndex::ep0())
@@ -462,7 +461,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             }
             Ok(err) => {
                 log::error!("err: {:?}", err);
-                return Err(usb_host::TransferError::Permanent("CompletionCode error"));
+                return Err(usb_host::TransferError::Retry("CompletionCode error"));
             }
             Err(err) => {
                 log::debug!("err: {:?}", err);

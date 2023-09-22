@@ -3,6 +3,7 @@ use core::{alloc::Allocator, cmp};
 extern crate alloc;
 use alloc::{boxed::Box, sync::Arc};
 use kernel_lib::mutex::Mutex;
+use x86_64::registers;
 use xhci::{
     accessor::Mapper,
     context::{Endpoint64Byte, Slot64Byte},
@@ -43,7 +44,7 @@ where
 
 impl<M> XhciController<M, &'static GlobalAllocator>
 where
-    M: Mapper + Clone + Send + Sync,
+    M: Mapper + Clone + Send + Sync + core::fmt::Debug,
 {
     /// # Safety
     /// The caller must ensure that the xHCI registers are accessed only through this struct.
@@ -60,11 +61,13 @@ where
         };
         if let Some(mut extended_capabilities_list) = extended_capabilities_list {
             for extended_capability in extended_capabilities_list.into_iter() {
+                log::debug!("extended_capability: {:?}", &extended_capability);
                 match extended_capability {
                     Err(_) => continue,
                     Ok(extended_capability) => match extended_capability {
                         ExtendedCapability::UsbLegacySupport(mut usb_legacy_support) => {
                             Self::request_hc_ownership(&mut usb_legacy_support)
+                            // todo: write volatile this register
                         }
                         ExtendedCapability::XhciSupportedProtocol(_) => {
                             log::debug!("xhci supported protocol")
@@ -287,6 +290,7 @@ where
             let port_configure_state = kernel_lib::lock!(self.port_configure_state);
             port_configure_state.is_connected(port_idx)
         };
+        // TODO: ここで !is_connected とするのでなく、phase == PortConfigPhase::NotConnected とする。
         if !is_connected {
             self.reset_port_at(port_idx);
         }
@@ -395,6 +399,24 @@ where
                     .portsc
                     .port_reset()
                 {}
+                port_register_sets.update_volatile_at(port_idx, |port| {
+                    // prevent clearing rw1c bits
+                    port.portsc.set_0_port_enabled_disabled();
+                    port.portsc.set_0_connect_status_change();
+                    port.portsc.set_0_port_enabled_disabled_change();
+                    port.portsc.set_0_warm_port_reset_change();
+                    port.portsc.set_0_over_current_change();
+                    port.portsc.set_0_port_reset_change();
+                    port.portsc.set_0_port_link_state_change();
+                    port.portsc.set_0_port_config_error_change();
+                    // actual reset operation of port
+                    port.portsc.clear_connect_status_change();
+                });
+                while port_register_sets
+                    .read_volatile_at(port_idx)
+                    .portsc
+                    .connect_status_change()
+                {}
                 log::debug!("[XHCI] port at {} is now reset!", port_idx);
                 log::debug!(
                     "ports[{}].portsc: {:#x?}",
@@ -423,6 +445,7 @@ where
         let port_reg_set = port_register_sets.read_volatile_at(port_idx);
         let is_enabled = port_reg_set.portsc.port_enabled_disabled();
         let current_connect_status = port_reg_set.portsc.current_connect_status();
+        // Port Reset をしたなら、少なくとも CSC bitは下がっていなければおかしい。
         let reset_completed = port_reg_set.portsc.connect_status_change();
 
         log::debug!(
@@ -433,13 +456,19 @@ where
             current_connect_status
         );
 
-        if is_enabled
-        /* && reset_completed */
-        {
+        if is_enabled && !reset_completed {
             port_register_sets.update_volatile_at(port_idx, |port_reg_set| {
+                // prevent clearing rw1c bits
+                port_reg_set.portsc.set_0_port_enabled_disabled();
+                port_reg_set.portsc.set_0_connect_status_change();
+                port_reg_set.portsc.set_0_port_enabled_disabled_change();
+                port_reg_set.portsc.set_0_warm_port_reset_change();
+                port_reg_set.portsc.set_0_over_current_change();
+                port_reg_set.portsc.set_0_port_reset_change();
+                port_reg_set.portsc.set_0_port_link_state_change();
+                port_reg_set.portsc.set_0_port_config_error_change();
                 // clear port reset change
                 port_reg_set.portsc.clear_port_reset_change();
-                // port_reg_set.portsc.set_0_port_reset_change();
             });
 
             let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
@@ -452,6 +481,8 @@ where
                 doorbell.set_doorbell_target(0);
                 doorbell.set_doorbell_stream_id(0);
             });
+        } else {
+            panic!("this port[{}] is not ready to be enabled slot", port_idx);
         }
     }
 
@@ -502,8 +533,10 @@ where
             );
 
             let slot_context = device.slot_context();
+            log::debug!("{}", slot_context.speed());
             // todo: check this calculation based on xhci spec
             let max_packet_size = Self::max_packet_size_for_control_pipe(slot_context.speed());
+            // let max_packet_size = Self::max_packet_size_for_control_pipe(4); // SuperSpeed
 
             // 5. Initialize the Input default control Endpoint 0 Context (6.2.3)
             device.initialize_endpoint0_context(transfer_ring_dequeue_pointer, max_packet_size);
@@ -521,6 +554,26 @@ where
             let device = device.as_mut().unwrap();
             &*device.input_context as *const InputContextWrapper as u64
         };
+        type InputContextRaw = [u32; 0x420 / 4];
+        static_assertions::const_assert_eq!(core::mem::size_of::<InputContextRaw>(), 0x420);
+        // unsafe {
+        //     (input_context_pointer as *mut u32)
+        //         .offset(8)
+        //         .write_volatile(0x8300000)
+        // };
+        // unsafe {
+        //     (input_context_pointer as *mut u32)
+        //         .offset(9)
+        //         .write_volatile(0x10000)
+        // };
+        // unsafe {
+        //     (input_context_pointer as *mut u32)
+        //         .offset(17)
+        //         .write_volatile(0x4000026)
+        // };
+        let input_context: InputContextRaw =
+            unsafe { (input_context_pointer as *const InputContextRaw).read_volatile() };
+        log::debug!("input context: {:x?}", input_context);
         let mut address_device_command = trb::command::AddressDevice::new();
         log::debug!("input context pointer: {:#x}", input_context_pointer);
         address_device_command.set_input_context_pointer(input_context_pointer);
@@ -713,7 +766,7 @@ where
 
 impl<M> XhciController<M, &'static GlobalAllocator>
 where
-    M: Mapper + Clone + Send + Sync,
+    M: Mapper + Clone + Send + Sync + core::fmt::Debug,
 {
     // process events
 
@@ -734,6 +787,21 @@ where
             }
             PortConfigPhase::WaitingAddressed => {
                 log::debug!("This portidx {} is waiting addressed", port_idx);
+                let mut can_start_initialization = false;
+                {
+                    let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+                    if port_configure_state.addressing_port_index.is_none() {
+                        // どのUSBポートも初期化中でない
+                        port_configure_state.addressing_port_index = Some(port_idx);
+                        port_configure_state
+                            .set_port_phase_at(port_idx, PortConfigPhase::NotConnected);
+                        can_start_initialization = true;
+                    }
+                };
+
+                if can_start_initialization {
+                    self.reset_port_at(port_idx);
+                }
                 // for port_idx in 0..self.number_of_ports() {
                 //     let registers = self.registers();
                 //     let port_register_sets = &registers.port_register_set;

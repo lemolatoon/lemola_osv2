@@ -182,15 +182,8 @@ impl TransferRing<&'static GlobalAllocator> {
         self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
 
         let trb_ptr = &mut self.trb_buffer[self.write_index] as *mut TrbRaw;
-        log::debug!(
-            "writing trb_ptr: {:p} in [{:p} - {:p}]",
-            trb_ptr,
-            self.trb_buffer.as_ptr(),
-            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
-        );
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
-            log::debug!("end of the ring");
             // reached end of the ring
             let mut link = trb::Link::new();
             link.set_ring_segment_pointer(self.trb_buffer.as_ptr() as u64);
