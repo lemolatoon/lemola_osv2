@@ -31,6 +31,14 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel
 	sudo cp kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf mnt/kernel.elf && \
 	sudo umount mnt
 
+install: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
+	mkdir -p mnt && \
+	sudo mount -t drvfs e: mnt && \
+	sudo mkdir -p mnt/EFI/BOOT && \
+	sudo cp bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi mnt/EFI/BOOT/BOOTX64.EFI && \
+	sudo cp kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf mnt/kernel.elf && \
+	sudo umount mnt
+
 run: disk.img
 	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
