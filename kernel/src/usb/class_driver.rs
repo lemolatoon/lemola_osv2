@@ -124,6 +124,32 @@ where
         Ok(())
     }
 
+    pub fn tick_until(
+        &mut self,
+        host: &mut dyn usb_host::USBHost,
+        state: DeviceState,
+    ) -> Result<(), DriverError> {
+        let mut millis = 0;
+        while self
+            .devices
+            .iter()
+            .any(|d| d.as_ref().map_or(false, |dd| dd.state != state))
+        {
+            for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
+                if device.state == DeviceState::Running {
+                    continue;
+                }
+                if let Err(TransferError::Permanent(e)) =
+                    device.fsm(millis, host, &mut self.callback)
+                {
+                    return Err(DriverError::Permanent(device.addr, e));
+                };
+                millis += 1;
+            }
+        }
+        Ok(())
+    }
+
     pub fn call_callback_at(&mut self, address: u8, buffer: &[u8]) {
         assert_eq!(
             self.devices
@@ -209,7 +235,7 @@ where
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum DeviceState {
+pub enum DeviceState {
     Addressed,
     WaitForSettle(usize),
     GetConfig,

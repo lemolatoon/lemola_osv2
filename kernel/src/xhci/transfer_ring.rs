@@ -64,7 +64,7 @@ impl TransferRing<&'static GlobalAllocator> {
                 .set_interrupt_on_short_packet()
                 .set_interrupter_target(0);
             self.push(transfer::Allowed::Normal(normal));
-            self.dump_state();
+            // self.dump_state();
         }
     }
 

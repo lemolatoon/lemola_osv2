@@ -3,9 +3,11 @@ use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
+use bit_field::BitField;
 use kernel_lib::{await_once_noblocking, await_sync, mutex::Mutex};
 use usb_host::{
-    ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, SetupPacket,
+    ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Driver, EndpointDescriptor,
+    SetupPacket,
 };
 use xhci::{
     accessor::Mapper,
@@ -307,6 +309,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                         endpoint_descriptor.as_ref().unwrap()
                     ))
                     .unwrap();
+                    let mut cnt = 1;
+                    loop {
+                        cnt += 1;
+                        Driver::tick(&mut driver_info.driver, cnt, self).unwrap();
+                    }
                 };
                 let transfer_ring = self
                     .transfer_ring_at_mut(dci)
@@ -509,15 +516,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                         endpoint_context.set_dequeue_cycle_state();
                         endpoint_context.set_error_count(3);
                         endpoint_context.set_max_packet_size(ep.max_packet_size());
-                        endpoint_context.set_average_trb_length(8); // TODO: set this correctly
+                        endpoint_context.set_average_trb_length(1); // TODO: set this correctly
                         endpoint_context.set_max_burst_size(0);
                         endpoint_context.set_max_primary_streams(0);
                         endpoint_context.set_max_endpoint_service_time_interval_payload_low(
                             ep.max_packet_size(),
                         );
                         endpoint_context.set_mult(0);
+                        log::debug!("port speed: {}", portsc.port_speed());
                         let interval = match portsc.port_speed() {
-                        1 /* FullSpeed */ | 2 /* LowSpeed */ => endpoint_descriptor.b_interval.ilog2() as u8 + 3,
+                        1 /* FullSpeed */ | 2 /* LowSpeed */ => endpoint_descriptor.b_interval.reverse_bits().get_bit(0) /* most significant bit */ as u8 + 3,
                         3 /* HighSpeed */ | 4 /* SuperSpeed */ => endpoint_descriptor.b_interval - 1,
                         _ => return Err(usb_host::TransferError::Permanent("Unknown speed")),
                     };

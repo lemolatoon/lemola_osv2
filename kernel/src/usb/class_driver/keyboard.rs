@@ -57,9 +57,13 @@ fn ep_for_bootkbd(buf: &[u8]) -> Option<EndpointInfo<'_>> {
                 interface_found = None;
             }
         } else if let DescriptorRef::Endpoint(edesc) = desc {
-            match (edesc.b_endpoint_address >> 7, edesc.bm_attributes & 3) {
-                // Interrupt IN endpoint
-                (1, 3) => {}
+            match (
+                edesc.b_endpoint_address >> 7,
+                edesc.bm_attributes & 3,
+                edesc.w_max_packet_size,
+            ) {
+                // Interrupt IN endpoint && boot keyboardぽい
+                (1, 3, 8) => {}
                 _ => continue,
             }
             if let Some(interface_num) = interface_found {
