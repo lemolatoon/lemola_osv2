@@ -309,11 +309,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                         endpoint_descriptor.as_ref().unwrap()
                     ))
                     .unwrap();
-                    let mut cnt = 1;
-                    loop {
-                        cnt += 1;
-                        Driver::tick(&mut driver_info.driver, cnt, self).unwrap();
-                    }
                 };
                 let transfer_ring = self
                     .transfer_ring_at_mut(dci)
@@ -321,6 +316,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                     .expect("transfer ring not allocated")
                     .as_mut();
                 transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
+                {
+                    // door-bell
+                    let mut registers = kernel_lib::lock!(self.registers);
+                    registers
+                        .doorbell
+                        .update_volatile_at(self.slot_id(), |doorbell| {
+                            doorbell.set_doorbell_target(dci.address());
+                            doorbell.set_doorbell_stream_id(0);
+                        });
+                }
             }
             if let Some(_mouse_interface) = mouse_interface {
                 let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
@@ -346,6 +351,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                     .expect("transfer ring not allocated")
                     .as_mut();
                 transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
+                {
+                    // door-bell
+                    let mut registers = kernel_lib::lock!(self.registers);
+                    registers
+                        .doorbell
+                        .update_volatile_at(self.slot_id(), |doorbell| {
+                            doorbell.set_doorbell_target(dci.address());
+                            doorbell.set_doorbell_stream_id(0);
+                        });
+                }
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
