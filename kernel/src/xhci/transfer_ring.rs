@@ -104,7 +104,6 @@ impl TransferRing<&'static GlobalAllocator> {
             self.write_index = 0;
             self.toggle_cycle_bit();
         }
-        self.dump_state();
     }
 
     pub fn buffer_range(&self) -> core::ops::Range<usize> {

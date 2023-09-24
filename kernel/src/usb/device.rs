@@ -478,11 +478,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            TransferEventFuture {
+            TransferEventFuture::new(
                 event_ring,
                 registers: Arc::clone(&self.registers),
                 wait_on: trb_wait_on,
-            }
+            )
             .await
         };
         match trb.completion_code() {

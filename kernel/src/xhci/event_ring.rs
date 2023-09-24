@@ -250,6 +250,20 @@ pub struct TransferEventFuture<M: Mapper + Clone + Send + Sync> {
     pub wait_on: TransferEventWaitKind,
 }
 
+impl<M: Mapper + Clone + Send + Sync> TransferEventFuture<M> {
+    pub fn new(
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+        registers: Arc<Mutex<Registers<M>>>,
+        wait_on: TransferEventWaitKind,
+    ) -> Self {
+        Self {
+            event_ring,
+            registers,
+            wait_on,
+        }
+    }
+}
+
 impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     type Output = trb::event::TransferEvent;
 
@@ -260,7 +274,6 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
         let wait_on = &self.wait_on;
-        log::info!("wait_on: {:x?}", wait_on);
         let event_ring_dequeue_pointer = {
             let mut registers = kernel_lib::lock!(registers);
             let interrupter = registers.interrupter_register_set.interrupter_mut(0);
