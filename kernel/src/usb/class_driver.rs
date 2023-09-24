@@ -105,10 +105,15 @@ where
         host: &mut dyn usb_host::USBHost,
     ) -> Result<(), DriverError> {
         let mut millis = 0;
+        log::info!("tick_until_running_state");
         while self.devices.iter().any(|d| {
             d.as_ref()
                 .map_or(false, |dd| dd.state != DeviceState::Running)
         }) {
+            millis += 1;
+            if millis % 1000_000 != 0 {
+                continue;
+            }
             for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
                 if device.state == DeviceState::Running {
                     continue;

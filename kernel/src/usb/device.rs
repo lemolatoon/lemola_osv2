@@ -29,7 +29,10 @@ use crate::{
         traits::AsyncUSBHost,
     },
     xhci::{
-        command_ring::CommandRing, event_ring::EventRing, transfer_ring::TransferRing, trb::TrbRaw,
+        command_ring::CommandRing,
+        event_ring::{EventRing, TransferEventFuture, TransferEventWaitKind},
+        transfer_ring::TransferRing,
+        trb::TrbRaw,
     },
 };
 
@@ -373,7 +376,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         endpoint_id: EndpointId,
         setup_data: SetupPacketWrapper,
         buf: Option<NonNull<[u8]>>,
-    ) -> u64 {
+    ) -> TransferEventWaitKind {
         let dci: DeviceContextIndex = endpoint_id.address();
         log::debug!(
             "control_in: setup_data: {:?}, ep addr: {:?}",
@@ -389,7 +392,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
 
         let setup_data = SetupPacketRaw::from(setup_data.0);
         let mut status_trb = transfer::StatusStage::new();
-        let wait_on = if let Some(buf) = buf {
+        let wait_ons = if let Some(buf) = buf {
             let buf = unsafe { buf.as_ref() };
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
@@ -399,7 +402,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 .set_index(setup_data.w_index)
                 .set_length(setup_data.w_length)
                 .set_transfer_type(TransferType::In);
-            transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb));
+            let setup_trb_ptr =
+                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
 
             let mut data_stage_trb = transfer::DataStage::new();
             data_stage_trb
@@ -412,8 +416,9 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             let data_trb_ref_in_ring =
                 transfer_ring.push(transfer::Allowed::DataStage(data_stage_trb)) as u64;
 
-            transfer_ring.push(transfer::Allowed::StatusStage(status_trb));
-            data_trb_ref_in_ring
+            let status_trb_ptr =
+                transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64;
+            alloc::vec![setup_trb_ptr, data_trb_ref_in_ring, status_trb_ptr]
         } else {
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
@@ -423,10 +428,14 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 .set_index(setup_data.w_index)
                 .set_length(setup_data.w_length)
                 .set_transfer_type(TransferType::No);
-            transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb));
+            let setup_stage_trb_ptr =
+                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
 
             status_trb.set_direction().set_interrupt_on_completion();
-            transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64
+            let status_trb_ptr =
+                transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64;
+
+            alloc::vec![setup_stage_trb_ptr, status_trb_ptr]
         };
 
         let mut registers = kernel_lib::lock!(self.registers);
@@ -442,7 +451,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                 ring.set_doorbell_target(dci.address());
                 ring.set_doorbell_stream_id(0);
             });
-        wait_on
+        TransferEventWaitKind::TrbPtrs(wait_ons)
     }
 
     pub async fn async_control_transfer(
@@ -469,11 +478,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            EventRing::get_received_transfer_trb_on_trb(
+            TransferEventFuture {
                 event_ring,
-                Arc::clone(&self.registers),
-                trb_wait_on,
-            )
+                registers: Arc::clone(&self.registers),
+                wait_on: trb_wait_on,
+            }
             .await
         };
         match trb.completion_code() {

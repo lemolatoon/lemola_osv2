@@ -237,13 +237,14 @@ impl EventRing<&'static GlobalAllocator> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum TransferEventWaitKind {
+#[derive(Debug, Clone)]
+pub enum TransferEventWaitKind {
     SlotId(u8),
     TrbPtr(u64),
+    TrbPtrs(Vec<u64>),
 }
 
-struct TransferEventFuture<M: Mapper + Clone + Send + Sync> {
+pub struct TransferEventFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: TransferEventWaitKind,
@@ -258,7 +259,8 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     ) -> core::task::Poll<Self::Output> {
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
-        let wait_on = self.wait_on;
+        let wait_on = &self.wait_on;
+        log::info!("wait_on: {:x?}", wait_on);
         let event_ring_dequeue_pointer = {
             let mut registers = kernel_lib::lock!(registers);
             let interrupter = registers.interrupter_register_set.interrupter_mut(0);
@@ -284,13 +286,13 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
         };
         match wait_on {
             TransferEventWaitKind::SlotId(slot_id) => match popped_trb {
-                Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == slot_id => {
+                Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == *slot_id => {
                     log::debug!("got event: {:x?}", event);
                     Poll::Ready(event)
                 }
                 Ok(trb) => {
                     // EventRing does not have front
-                    log::warn!("ignoring trb: {:?}", trb);
+                    log::warn!("ignoring trb: {:x?}", trb);
                     {
                         let mut event_ring = kernel_lib::lock!(event_ring);
                         event_ring.push(trb);
@@ -298,19 +300,19 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                     Poll::Pending
                 }
                 Err(trb) => {
-                    log::info!("ignoring err...: {:?}", trb);
+                    log::info!("ignoring err...: {:x?}", trb);
                     Poll::Pending
                 }
             },
             TransferEventWaitKind::TrbPtr(ptr) => {
                 match popped_trb {
-                    Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == ptr => {
+                    Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
                         log::debug!("got event: {:?}", event);
                         Poll::Ready(event)
                     }
                     Ok(trb) => {
                         // EventRing does not have front
-                        log::warn!("ignoring trb: {:?}", trb);
+                        log::warn!("ignoring trb: {:x?}", trb);
                         {
                             let mut event_ring = kernel_lib::lock!(event_ring);
                             event_ring.push(trb);
@@ -318,10 +320,37 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                         Poll::Pending
                     }
                     Err(trb) => {
-                        log::info!("ignoring err...: {:?}", trb);
+                        log::info!("ignoring err...: {:x?}", trb);
                         Poll::Pending
                     }
                 }
+            }
+            TransferEventWaitKind::TrbPtrs(ptrs) => {
+                for ptr in ptrs {
+                    match &popped_trb {
+                        Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
+                            log::debug!("got event: {:?}", event);
+                            return Poll::Ready(event.clone());
+                        }
+                        Ok(_trb) => {
+                            // ignoring...
+                        }
+                        Err(trb) => {
+                            log::info!("ignoring err...: {:x?}", trb);
+
+                            return Poll::Pending;
+                        }
+                    }
+                }
+
+                // EventRing does not have front
+                log::warn!("ignoring trb: {:x?}", &popped_trb);
+                {
+                    let mut event_ring = kernel_lib::lock!(event_ring);
+                    event_ring.push(popped_trb.unwrap());
+                }
+
+                Poll::Pending
             }
         }
     }
@@ -370,7 +399,7 @@ impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture
                 Poll::Pending
             }
             Err(trb) => {
-                log::info!("ignoring err...: {:?}", trb);
+                log::info!("ignoring err...: {:x?}", trb);
                 Poll::Pending
             }
         }
