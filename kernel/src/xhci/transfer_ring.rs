@@ -10,7 +10,7 @@ use crate::alloc::alloc::{
 };
 use crate::graphics::InstantWriter;
 use crate::memory::PAGE_SIZE;
-use crate::{serial_print, serial_println};
+use crate::serial_print;
 
 use super::trb::TrbRaw;
 

@@ -44,6 +44,12 @@ impl PendingOnceFuture {
     }
 }
 
+impl Default for PendingOnceFuture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Future for PendingOnceFuture {
     type Output = ();
 

@@ -18,11 +18,7 @@ use crate::{
         class_driver::{keyboard, mouse, ClassDriverManager, DriverKind},
         device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
     },
-    xhci::{
-        command_ring::CommandRing,
-        event_ring::{self, EventRing},
-        trb::TrbRaw,
-    },
+    xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
 };
 use spin::MutexGuard;
 
@@ -275,7 +271,6 @@ where
             event::Allowed::Doorbell(_) => todo!(),
             event::Allowed::HostController(host_controller) => {
                 log::warn!("ignoring... {:?}", host_controller);
-                return;
             }
             event::Allowed::DeviceNotification(_) => todo!(),
             event::Allowed::MfindexWrap(_) => todo!(),
@@ -902,9 +897,9 @@ where
             PortConfigPhase::NotConnected => {
                 let can_process = {
                     let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
-                    if port_configure_state.addressing_port_index == Some(port_idx) {
-                        true
-                    } else if port_configure_state.addressing_port_index.is_none() {
+                    if port_configure_state.addressing_port_index == Some(port_idx)
+                        || port_configure_state.addressing_port_index.is_none()
+                    {
                         true
                     } else {
                         port_configure_state
@@ -980,7 +975,6 @@ where
                 //         }
                 //     }
                 // }
-                return;
             }
             state => {
                 log::debug!("state: {:?}, connecting: {}", state, connecting);
@@ -990,7 +984,6 @@ where
                         port_idx
                     );
                     self.reset_connection_at(port_idx).await;
-                    return;
                 }
             }
         }
@@ -1175,7 +1168,7 @@ where
             let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
             let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
 
-            if let transfer::Allowed::Normal(normal) = trb {
+            if let transfer::Allowed::Normal(_normal) = trb {
                 transfer_ring.flip_cycle_bit_at(trb_pointer as u64);
             }
             trb
@@ -1234,7 +1227,6 @@ where
             }
         } else {
             log::warn!("ignoring... {:x?}", trb);
-            return;
         }
     }
 }

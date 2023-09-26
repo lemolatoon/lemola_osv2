@@ -19,7 +19,7 @@ use kernel::{
     usb::{class_driver::callbacks, device::DeviceContextInfo},
     xhci::init_xhci_controller,
 };
-use kernel_lib::{await_sync, render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
+use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {

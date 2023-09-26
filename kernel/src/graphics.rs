@@ -8,7 +8,7 @@ use kernel_lib::{
 };
 use once_cell::unsync::OnceCell;
 
-use crate::{serial_print, serial_println};
+use crate::serial_print;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Rgb;

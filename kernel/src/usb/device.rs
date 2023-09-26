@@ -4,10 +4,9 @@ use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bit_field::BitField;
-use kernel_lib::{await_once_noblocking, await_sync, mutex::Mutex};
+use kernel_lib::{await_sync, mutex::Mutex};
 use usb_host::{
-    ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Driver, EndpointDescriptor,
-    SetupPacket,
+    ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, SetupPacket,
 };
 use xhci::{
     accessor::Mapper,

@@ -111,7 +111,7 @@ where
                 .map_or(false, |dd| dd.state != DeviceState::Running)
         }) {
             millis += 1;
-            if millis % 1000_000 != 0 {
+            if millis % 1_000_000 != 0 {
                 continue;
             }
             for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {

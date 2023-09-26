@@ -69,6 +69,7 @@ pub trait Renderer: PixcelWritable {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn render_board(&self, board: &Vec<Vec<bool>>, pos: Vector2D, size: usize, color: Color) {
         let len = board.len();
         for y in 0..len {

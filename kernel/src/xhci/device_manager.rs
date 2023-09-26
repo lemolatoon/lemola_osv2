@@ -133,6 +133,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
 #[derive(Debug)]
 struct DeviceContextArray<M: Mapper + Clone + Send + Sync, A: Allocator> {
     device_contexts: Mutex<Box<[Device32BytePtr], A>>,
+    #[allow(clippy::type_complexity)]
     device_context_infos: Vec<Arc<Mutex<Option<DeviceContextInfo<M, A>>>>>,
 }
 

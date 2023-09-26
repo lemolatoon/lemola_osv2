@@ -343,7 +343,7 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                     match &popped_trb {
                         Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
                             log::debug!("got event: {:?}", event);
-                            return Poll::Ready(event.clone());
+                            return Poll::Ready(*event);
                         }
                         Ok(_trb) => {
                             // ignoring...

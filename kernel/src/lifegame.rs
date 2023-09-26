@@ -1,13 +1,12 @@
 extern crate alloc;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use kernel_lib::futures::yield_pending;
 use kernel_lib::mutex::Mutex;
 use kernel_lib::render::Vector2D;
-use kernel_lib::{Color, PixcelInfo};
-use x86_64::structures::paging::frame;
+use kernel_lib::Color;
 
 use crate::graphics::get_pixcel_writer;
 
@@ -89,19 +88,7 @@ pub async fn do_lifegame() {
     }
 }
 
-fn pretty_print_board(board: &Vec<Vec<bool>>) {
-    for row in board {
-        let mut array = [0; 20];
-        for i in 0..(array.len()) {
-            if row[i] {
-                array[i] = 1;
-            }
-        }
-        log::debug!("{:?}", array);
-    }
-}
-
-fn process<const SIZE: usize>(board: &mut Vec<Vec<bool>>) {
+fn process<const SIZE: usize>(board: &mut [Vec<bool>]) {
     let mut next_board = [[false; SIZE]; SIZE];
     for i in 0..SIZE {
         for j in 0..SIZE {
@@ -125,10 +112,8 @@ fn process<const SIZE: usize>(board: &mut Vec<Vec<bool>>) {
                 if count == 2 || count == 3 {
                     next_board[i][j] = true;
                 }
-            } else {
-                if count == 3 {
-                    next_board[i][j] = true;
-                }
+            } else if count == 3 {
+                next_board[i][j] = true;
             }
         }
     }

@@ -6,8 +6,7 @@ use kernel_lib::{
 use crate::{
     graphics::get_pixcel_writer,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
-    print, print_and_flush,
-    usb::class_driver::keyboard,
+    print_and_flush,
 };
 
 static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(700, 500);
@@ -129,11 +128,17 @@ const KEYCODE_MAP_SHIFTED: [char; 144] = [
     NULL, '|', NULL, NULL, NULL, NULL, NULL, NULL, // 136
 ];
 
+#[allow(dead_code)]
 const L_CONTROL_BITMASK: u8 = 0b00000001;
 const L_SHIFT_BITMASK: u8 = 0b00000010;
+#[allow(dead_code)]
 const L_ALT_BITMASK: u8 = 0b00000100;
+#[allow(dead_code)]
 const L_GUI_BITMASK: u8 = 0b00001000;
+#[allow(dead_code)]
 const R_CONTROL_BITMASK: u8 = 0b00010000;
 const R_SHIFT_BITMASK: u8 = 0b00100000;
+#[allow(dead_code)]
 const R_ALT_BITMASK: u8 = 0b01000000;
+#[allow(dead_code)]
 const R_GUI_BITMASK: u8 = 0b10000000;
