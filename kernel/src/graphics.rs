@@ -8,7 +8,7 @@ use kernel_lib::{
 };
 use once_cell::unsync::OnceCell;
 
-use crate::serial_print;
+use crate::{serial_print, serial_println};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Rgb;
@@ -252,7 +252,7 @@ impl log::Log for SerialAndVgaCharWriter {
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            if record.level() <= log::Level::Info {
+            if record.level() <= log::LevelFilter::Info {
                 let mut serial_vga_writer = InstantWriter::new(|s| {
                     serial_print!("{}", s);
                     crate::print!("{}", s)
@@ -267,9 +267,6 @@ impl log::Log for SerialAndVgaCharWriter {
                 .unwrap();
             } else {
                 // let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
-                // let mut serial_writer = InstantWriter::new(|s| {
-                //     serial_print!("{}", s);
-                // });
                 // DecoratedLog::write(
                 //     &mut serial_writer,
                 //     record.level(),

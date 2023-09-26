@@ -60,26 +60,19 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     // x86_64::instructions::interrupts::enable();
 
-    // let mut executor = Executor::new();
+    let mut executor = Executor::new();
     let controller: &'static _ = unsafe { &*(&controller as *const _) };
     let class_drivers: &'static _ = unsafe { &*(&class_drivers as *const _) };
-    await_sync!(kernel::xhci::poll_forever(controller, class_drivers));
-    loop {
-        unsafe {
-            asm!("hlt");
-        }
-    }
-    // let polling_task = Task::new(
-    //     Priority::Default,
-    //     kernel::xhci::poll_forever(controller, class_drivers),
-    // );
-    // let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
-    // executor.spawn(polling_task);
-    // executor.spawn(lifegame_task);
+    let polling_task = Task::new(
+        Priority::Default,
+        kernel::xhci::poll_forever(controller, class_drivers),
+    );
+    let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
+    executor.spawn(polling_task);
+    executor.spawn(lifegame_task);
 
-    // // x86_64::instructions::interrupts::enable();
-    // log::debug!("before executor.run()");
-    // executor.run();
+    // x86_64::instructions::interrupts::enable();
+    executor.run();
 }
 
 #[panic_handler]

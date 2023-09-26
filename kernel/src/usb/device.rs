@@ -570,14 +570,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                     let mut command_ring = kernel_lib::lock!(self.command_ring);
                     command_ring.push(command::Allowed::ConfigureEndpoint(trb))
                 } as u64;
+                {
+                    let mut registers = kernel_lib::lock!(self.registers);
+                    registers.doorbell.update_volatile_at(0, |doorbell| {
+                        doorbell.set_doorbell_target(0);
+                        doorbell.set_doorbell_stream_id(0);
+                    });
+                }
                 let event_ring = Arc::clone(&self.event_ring);
-                let mut registers = kernel_lib::lock!(self.registers);
-                registers.doorbell.update_volatile_at(0, |doorbell| {
-                    doorbell.set_doorbell_target(0);
-                    doorbell.set_doorbell_stream_id(0);
-                });
-                let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-                EventRing::get_received_command_trb(event_ring, &mut interrupter, trb_ptr).await
+                let registers = Arc::clone(&self.registers);
+                EventRing::get_received_command_trb(event_ring, registers, trb_ptr).await
             };
             match trb.completion_code() {
                 Ok(event::CompletionCode::Success) => {

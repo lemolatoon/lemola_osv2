@@ -225,12 +225,12 @@ impl EventRing<&'static GlobalAllocator> {
 
     pub async fn get_received_command_trb<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        registers: Arc<Mutex<Registers<M>>>,
         trb_ptr: u64,
     ) -> trb::event::CommandCompletion {
         CommandCompletionFuture {
             event_ring,
-            interrupter,
+            registers,
             wait_on: trb_ptr,
         }
         .await
@@ -369,13 +369,13 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     }
 }
 
-struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone + Send + Sync> {
+struct CommandCompletionFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-    pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+    pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: u64, // trb_ptr
 }
 
-impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture<'a, 'b, M> {
+impl<M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture<M> {
     type Output = trb::event::CommandCompletion;
 
     fn poll(
@@ -384,12 +384,15 @@ impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture
     ) -> core::task::Poll<Self::Output> {
         // FIXME: this is safe because called member methods does not move them, but their must be a better way
         let Self {
-            interrupter,
+            registers,
             event_ring,
             wait_on,
         } = unsafe { self.get_unchecked_mut() };
         let event_ring_trb = unsafe {
-            (interrupter
+            let mut registers = kernel_lib::lock!(registers);
+            (registers
+                .interrupter_register_set
+                .interrupter_mut(0)
                 .erdp
                 .read_volatile()
                 .event_ring_dequeue_pointer() as *const trb::Link)
@@ -400,7 +403,12 @@ impl<'a, 'b, M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture
             // EventRing does not have front
             return Poll::Pending;
         }
-        match event_ring.pop(interrupter) {
+        let trb = {
+            let mut registers = kernel_lib::lock!(registers);
+            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            event_ring.pop(&mut interrupter)
+        };
+        match trb {
             Ok(event::Allowed::CommandCompletion(event))
                 if event.command_trb_pointer() == *wait_on =>
             {

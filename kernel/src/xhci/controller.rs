@@ -1,12 +1,10 @@
 use core::{alloc::Allocator, cmp};
 
 extern crate alloc;
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use kernel_lib::mutex::Mutex;
-use x86_64::registers;
 use xhci::{
     accessor::Mapper,
-    context::{Endpoint64Byte, Slot64Byte},
     extended_capabilities::{self, usb_legacy_support_capability},
     ring::trb::{self, event, transfer},
     ExtendedCapability,
@@ -20,7 +18,11 @@ use crate::{
         class_driver::{keyboard, mouse, ClassDriverManager, DriverKind},
         device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
     },
-    xhci::{command_ring::CommandRing, event_ring::EventRing, trb::TrbRaw},
+    xhci::{
+        command_ring::CommandRing,
+        event_ring::{self, EventRing},
+        trb::TrbRaw,
+    },
 };
 use spin::MutexGuard;
 
@@ -41,6 +43,8 @@ where
     event_ring: Arc<Mutex<EventRing<A>>>,
     number_of_ports: u8,
     port_configure_state: Mutex<PortConfigureState>,
+    // port_id -> vector of slot_id
+    port_slot_id_map: Mutex<BTreeMap<usize, Vec<usize>>>,
 }
 
 impl<M> XhciController<M, &'static GlobalAllocator>
@@ -154,6 +158,7 @@ where
             event_ring,
             number_of_ports,
             port_configure_state,
+            port_slot_id_map: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -264,6 +269,7 @@ where
             }
             event::Allowed::PortStatusChange(port_status_change) => {
                 self.process_port_status_change_event(port_status_change)
+                    .await
             }
             event::Allowed::BandwidthRequest(_) => todo!(),
             event::Allowed::Doorbell(_) => todo!(),
@@ -496,6 +502,14 @@ where
         );
         let ep0_dci = DeviceContextIndex::ep0();
 
+        {
+            let mut port_slot_id_map = kernel_lib::lock!(self.port_slot_id_map);
+            port_slot_id_map
+                .entry(port_index)
+                .or_insert_with(Vec::new)
+                .push(slot_id);
+        }
+
         // 1. Allocate an Input Context ...
         // 4. Allocate and initialize the Transfer Ring for Default Control Endpoint...
         // 6. Allocate the Output Device Context data structure (6.2.1)...
@@ -609,11 +623,19 @@ where
             log::error!("device not found for slot_id: {}", slot_id);
             panic!("Invalid slot_id!");
         };
-        let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
-        port_configure_state
-            .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
+        {
+            let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+            port_configure_state
+                .set_port_phase_at(port_idx as usize, PortConfigPhase::InitializingDevice);
+        }
 
         device.start_initialization(class_driver_manager).await;
+
+        {
+            let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+            port_configure_state.set_port_phase_at(port_idx as usize, PortConfigPhase::Configured);
+            port_configure_state.addressing_port_index = None;
+        }
     }
 
     pub fn max_packet_size_for_control_pipe(slot_speed: u8) -> u16 {
@@ -763,6 +785,94 @@ where
     ) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
         self.device_manager.device_by_slot_id(slot_id)
     }
+
+    async fn reset_connection_at(&self, port_idx: usize) {
+        log::debug!("reset_connection_at[{}]", port_idx);
+        // reset PortConfigPhase
+        let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+        if let Some(addressing_port_index) = port_configure_state.addressing_port_index {
+            if addressing_port_index == port_idx {
+                port_configure_state.addressing_port_index = None;
+            }
+        }
+        port_configure_state.set_port_phase_at(port_idx, PortConfigPhase::NotConnected);
+
+        let slot_ids = {
+            let port_slot_id_map = kernel_lib::lock!(self.port_slot_id_map);
+            port_slot_id_map.get(&port_idx).cloned()
+        };
+        {
+            let mut registers = kernel_lib::lock!(self.registers);
+            let port_register_sets = &mut registers.port_register_set;
+            port_register_sets.update_volatile_at(port_idx, |port| {
+                // prevent clearing rw1c bits
+                port.portsc.set_0_port_enabled_disabled();
+                port.portsc.set_0_connect_status_change();
+                port.portsc.set_0_port_enabled_disabled_change();
+                port.portsc.set_0_warm_port_reset_change();
+                port.portsc.set_0_over_current_change();
+                port.portsc.set_0_port_reset_change();
+                port.portsc.set_0_port_link_state_change();
+                port.portsc.set_0_port_config_error_change();
+                // actual reset operation of port
+                port.portsc.clear_connect_status_change();
+            });
+            while port_register_sets
+                .read_volatile_at(port_idx)
+                .portsc
+                .connect_status_change()
+            {}
+        }
+
+        if let Some(slot_ids) = slot_ids {
+            // deallocate DeviceContextInfo
+            for slot_id in slot_ids {
+                log::debug!("slot_id: {}", slot_id);
+                {
+                    let mut count = 0;
+                    loop {
+                        let trb_ptr = {
+                            let mut disable_slot = trb::command::DisableSlot::new();
+                            disable_slot.set_slot_id(slot_id as u8);
+                            let mut command_ring = kernel_lib::lock!(self.command_ring);
+                            command_ring.push(trb::command::Allowed::DisableSlot(disable_slot))
+                                as u64
+                        };
+                        {
+                            let mut registers = kernel_lib::lock!(self.registers);
+                            registers.doorbell.update_volatile_at(0, |doorbell| {
+                                doorbell.set_doorbell_target(0);
+                                doorbell.set_doorbell_stream_id(0);
+                            });
+                        }
+
+                        let event_ring = Arc::clone(&self.event_ring);
+                        let registers = Arc::clone(&self.registers);
+                        let trb =
+                            EventRing::get_received_command_trb(event_ring, registers, trb_ptr)
+                                .await;
+                        log::debug!("trb: {:?}", trb);
+                        match trb.completion_code() {
+                            Ok(_) => break,
+                            Err(_) => {
+                                if count < 10 {
+                                    count += 1;
+                                    continue;
+                                } else {
+                                    panic!("failed to get transfer trb on slot_id: {}", slot_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.device_manager.deallocate_device(slot_id);
+            }
+        }
+        {
+            let mut port_slot_id_map = kernel_lib::lock!(self.port_slot_id_map);
+            port_slot_id_map.remove(&port_idx);
+        }
+    }
 }
 
 impl<M> XhciController<M, &'static GlobalAllocator>
@@ -771,17 +881,42 @@ where
 {
     // process events
 
-    fn process_port_status_change_event(&self, event: trb::event::PortStatusChange) {
+    async fn process_port_status_change_event(&self, event: trb::event::PortStatusChange) {
         log::debug!("PortStatusChangeEvent: port_id: {}", event.port_id());
         let port_idx = event.port_id() as usize - 1;
 
+        let connecting = {
+            let mut registers = kernel_lib::lock!(self.registers);
+            let port_register_sets = &mut registers.port_register_set;
+            port_register_sets
+                .read_volatile_at(port_idx)
+                .portsc
+                .current_connect_status()
+        };
         let port_config_phase = {
             let port_configure_state = kernel_lib::lock!(self.port_configure_state);
             port_configure_state.port_phase_at(port_idx)
         };
         log::debug!("port_config_phase: {:?}", port_config_phase);
         match port_config_phase {
-            PortConfigPhase::NotConnected => self.reset_port_at(port_idx),
+            PortConfigPhase::NotConnected => {
+                let can_process = {
+                    let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+                    if port_configure_state.addressing_port_index == Some(port_idx) {
+                        true
+                    } else if port_configure_state.addressing_port_index.is_none() {
+                        true
+                    } else {
+                        port_configure_state
+                            .set_port_phase_at(port_idx, PortConfigPhase::WaitingAddressed);
+                        false
+                    }
+                };
+                if can_process {
+                    self.reset_port_at(port_idx);
+                    self.enable_slot_at(port_idx);
+                }
+            }
             PortConfigPhase::ResettingPort => {
                 // already called reset_port_at once
                 self.enable_slot_at(port_idx);
@@ -824,12 +959,16 @@ where
                 // }
                 return;
             }
-            PortConfigPhase::EnablingSlot => {
-                log::warn!("port[{}]: we received PortStatusChange on EnablingSlot, but decide ignore this", port_idx);
-            }
             state => {
-                log::error!("InvalidPhase: {:?}", state);
-                panic!("InvalidPhase")
+                log::debug!("state: {:?}, connecting: {}", state, connecting);
+                if !connecting {
+                    log::debug!(
+                        "port[{}] is connecting, then lets reset port config phase",
+                        port_idx
+                    );
+                    self.reset_connection_at(port_idx).await;
+                    return;
+                }
             }
         }
     }
@@ -978,12 +1117,12 @@ where
         MFF: Fn(u8, &[u8]),
         KFF: Fn(u8, &[u8]),
     {
-        serial_println!("TransferEvent received: {:?}", &event);
+        serial_println!("TransferEvent received");
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
             Ok(code) => {
                 log::error!("TransferEvent failed: {:?}", code);
-                panic!("TransferEvent failed: {:?}", code);
+                return;
             }
             Err(code) => {
                 log::error!(

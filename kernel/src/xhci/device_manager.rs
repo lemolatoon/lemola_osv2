@@ -90,6 +90,16 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         Arc::clone(&self.device_context_array.device_context_infos[slot_id])
     }
 
+    pub fn deallocate_device(&self, slot_id: usize) {
+        log::debug!("deallocate_device: {}", slot_id);
+        {
+            let mut device_context_info =
+                kernel_lib::lock!(self.device_context_array.device_context_infos[slot_id]);
+            assert!(device_context_info.is_some());
+            *device_context_info = None;
+        }
+    }
+
     pub fn device_by_slot_id(
         &self,
         slot_id: usize,
