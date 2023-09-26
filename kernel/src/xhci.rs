@@ -37,17 +37,19 @@ pub async fn poll_forever<MF, KF>(
 {
     loop {
         {
-            while controller.pending_already_popped_queue() {
+            if controller.pending_already_popped_queue() {
                 log::debug!("having pending already popped queue");
                 controller.process_once_received(class_driver_manager).await;
             }
-            while controller.pending_event() {
+            if controller.pending_event() {
                 log::debug!("having pending event");
                 controller.process_event(class_driver_manager).await;
             }
         }
 
-        yield_pending().await;
+        for _ in 0..100 {
+            yield_pending().await;
+        }
     }
 }
 

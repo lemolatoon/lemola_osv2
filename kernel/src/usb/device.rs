@@ -478,12 +478,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            TransferEventFuture::new(
-                event_ring,
-                registers: Arc::clone(&self.registers),
-                wait_on: trb_wait_on,
-            )
-            .await
+            TransferEventFuture::new(event_ring, Arc::clone(&self.registers), trb_wait_on).await
         };
         match trb.completion_code() {
             Ok(event::CompletionCode::ShortPacket) => {}
@@ -941,7 +936,7 @@ impl<M: Mapper + Clone + Send + Sync> usb_host::USBHost
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
         // Returned None means the transfer is Pending yet
-        await_once_noblocking!(self.async_control_transfer(
+        await_sync!(self.async_control_transfer(
             unsafe { core::mem::transmute(ep) },
             bm_request_type,
             b_request,
@@ -949,7 +944,6 @@ impl<M: Mapper + Clone + Send + Sync> usb_host::USBHost
             w_index,
             buf
         ))
-        .unwrap_or(Err(usb_host::TransferError::Retry("transfer is pending")))
     }
 
     fn in_transfer(

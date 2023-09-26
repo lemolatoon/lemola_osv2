@@ -46,7 +46,8 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     reset_text_output(boot_services);
 
-    log::debug!("Hello from uefi.rs");
+    log::info!("Hello from uefi.rs");
+    log::set_max_level(log::LevelFilter::Info);
 
     let buf_size = boot_services.memory_map_size().map_size + 1024;
     let mut dont_use_this_uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);

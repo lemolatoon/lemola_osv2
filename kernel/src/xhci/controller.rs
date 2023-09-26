@@ -15,6 +15,7 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
+    serial_println,
     usb::{
         class_driver::{keyboard, mouse, ClassDriverManager, DriverKind},
         device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
@@ -977,7 +978,7 @@ where
         MFF: Fn(u8, &[u8]),
         KFF: Fn(u8, &[u8]),
     {
-        log::debug!("TransferEvent received: {:?}", &event);
+        serial_println!("TransferEvent received: {:?}", &event);
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
             Ok(code) => {
@@ -1001,8 +1002,20 @@ where
         let slot_id = event.slot_id();
         let dci = DeviceContextIndex::checked_new(event.endpoint_id());
 
-        let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
-        let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
+        let trb = {
+            let device = self.usb_device_host_at(slot_id as usize);
+            let mut device = kernel_lib::lock!(device);
+            let device = device.as_mut().unwrap();
+            let transfer_ring = device.transfer_ring_at_mut(dci).as_mut().unwrap();
+
+            let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
+            let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
+
+            if let transfer::Allowed::Normal(normal) = trb {
+                transfer_ring.flip_cycle_bit_at(trb_pointer as u64);
+            }
+            trb
+        };
         if let transfer::Allowed::Normal(normal) = trb {
             // let transfer_ring = device
             //     .transfer_ring_at_mut(DeviceContextIndex::checked_new(dci))
@@ -1044,14 +1057,6 @@ where
                     keyboard.driver.call_callback_at(address, buffer);
                 }
                 None => todo!(),
-            }
-            {
-                // for debug printing
-                let device = self.usb_device_host_at(slot_id as usize);
-                let mut device = kernel_lib::lock!(device);
-                let device = device.as_mut().unwrap();
-                let transfer_ring = device.transfer_ring_at_mut(dci).as_mut().unwrap();
-                transfer_ring.flip_cycle_bit_at(trb_pointer as u64);
             }
 
             {

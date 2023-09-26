@@ -357,7 +357,7 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                 }
 
                 // EventRing does not have front
-                log::warn!("ignoring trb: {:x?}", &popped_trb);
+                log::warn!("ignoring trb: {:x?} for {:?}", &popped_trb, ptrs);
                 {
                     let mut event_ring = kernel_lib::lock!(event_ring);
                     event_ring.push(popped_trb.unwrap());

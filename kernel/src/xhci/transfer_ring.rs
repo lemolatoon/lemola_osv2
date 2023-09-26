@@ -10,7 +10,7 @@ use crate::alloc::alloc::{
 };
 use crate::graphics::InstantWriter;
 use crate::memory::PAGE_SIZE;
-use crate::serial_print;
+use crate::{serial_print, serial_println};
 
 use super::trb::TrbRaw;
 
@@ -19,6 +19,7 @@ pub struct TransferRing<A: Allocator> {
     trb_buffer: Box<[TrbRaw], A>,
     write_index: usize,
     cycle_bit: bool,
+    cycle_count: usize,
 }
 
 impl TransferRing<&'static GlobalAllocator> {
@@ -40,6 +41,7 @@ impl TransferRing<&'static GlobalAllocator> {
             trb_buffer,
             write_index,
             cycle_bit,
+            cycle_count: 0,
         }
     }
 
@@ -88,6 +90,7 @@ impl TransferRing<&'static GlobalAllocator> {
 
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
+            self.cycle_count += 1;
             log::debug!("end of the ring");
             // reached end of the ring
             let mut link = trb::Link::new();
@@ -104,6 +107,8 @@ impl TransferRing<&'static GlobalAllocator> {
             self.write_index = 0;
             self.toggle_cycle_bit();
         }
+        // serial_println!("cycle_count: {}", self.cycle_count);
+        // self.dump_state();
     }
 
     pub fn buffer_range(&self) -> core::ops::Range<usize> {
