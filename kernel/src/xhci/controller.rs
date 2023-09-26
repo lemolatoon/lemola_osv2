@@ -918,8 +918,23 @@ where
                 }
             }
             PortConfigPhase::ResettingPort => {
-                // already called reset_port_at once
-                self.enable_slot_at(port_idx);
+                let can_process = {
+                    let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+                    if port_configure_state.addressing_port_index == Some(port_idx) {
+                        true
+                    } else if port_configure_state.addressing_port_index.is_none() {
+                        port_configure_state.addressing_port_index = Some(port_idx);
+                        true
+                    } else {
+                        port_configure_state
+                            .set_port_phase_at(port_idx, PortConfigPhase::WaitingAddressed);
+                        false
+                    }
+                };
+                if can_process {
+                    // already called reset_port_at once
+                    self.enable_slot_at(port_idx);
+                }
             }
             PortConfigPhase::WaitingAddressed => {
                 log::debug!("This portidx {} is waiting addressed", port_idx);
@@ -936,7 +951,15 @@ where
                 };
 
                 if can_start_initialization {
+                    log::debug!(
+                        "can start initialization, port_configure_state: {:?}",
+                        kernel_lib::lock!(self.port_configure_state)
+                    );
                     self.reset_port_at(port_idx);
+                    self.enable_slot_at(port_idx);
+                } else {
+                    kernel_lib::lock!(self.event_ring)
+                        .push(trb::event::Allowed::PortStatusChange(event));
                 }
                 // for port_idx in 0..self.number_of_ports() {
                 //     let registers = self.registers();
@@ -1025,6 +1048,7 @@ where
                     let port_configure_state = kernel_lib::lock!(self.port_configure_state);
                     let Some(addressing_port_phase) = port_configure_state.addressing_port_phase()
                     else {
+                        log::error!("port_configure_state: {:?}", &port_configure_state);
                         log::error!(
                             "No addressing port: {:?}",
                             port_configure_state.addressing_port_index
@@ -1032,6 +1056,7 @@ where
                         panic!("InvalidPhase");
                     };
                     if addressing_port_phase != PortConfigPhase::EnablingSlot {
+                        log::error!("port_configure_state: {:?}", &port_configure_state);
                         log::error!("InvalidPhase: {:?}", addressing_port_phase);
                         panic!("InvalidPhase")
                     }
