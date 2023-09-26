@@ -11,9 +11,13 @@ use kernel::{
     graphics::{init_graphics, init_logger},
     interrupts::init_idt,
     memory::MemoryMapper,
+    multitasking::{
+        executor::Executor,
+        task::{Priority, Task},
+    },
     println, serial_println,
-    usb::device::DeviceContextInfo,
-    xhci::{init_xhci_controller, XHC},
+    usb::{class_driver::callbacks, device::DeviceContextInfo},
+    xhci::init_xhci_controller,
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
@@ -26,7 +30,9 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     pixcel_writer.fill_rect(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white());
     println!("global WRITER initialized?");
     writeln!(
-        kernel::graphics::WRITER.0.lock().get_mut().unwrap(),
+        kernel_lib::lock!(kernel::graphics::WRITER.0)
+            .get_mut()
+            .unwrap(),
         "Hello lemola os!!!"
     )
     .unwrap();
@@ -39,26 +45,34 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
 
-    init_xhci_controller();
+    let controller = init_xhci_controller();
+    let class_drivers = kernel::usb::class_driver::ClassDriverManager::new(
+        callbacks::mouse(),
+        callbacks::keyboard(),
+    );
     init_idt();
 
-    let mut count = 1;
     static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: usb_host::USBHost);
 
     x86_64::instructions::interrupts::int3();
     // FIXME: this comment outted code causes infinite exception loop
     // unsafe { asm!("ud2") };
 
-    x86_64::instructions::interrupts::enable();
+    // x86_64::instructions::interrupts::enable();
 
-    loop {
-        count += 1;
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let mut controller = XHC.lock();
-            let controller = controller.get_mut().unwrap();
-            controller.tick_mouse(count).unwrap();
-        });
-    }
+    let mut executor = Executor::new();
+    let controller: &'static _ = unsafe { &*(&controller as *const _) };
+    let class_drivers: &'static _ = unsafe { &*(&class_drivers as *const _) };
+    let polling_task = Task::new(
+        Priority::Default,
+        kernel::xhci::poll_forever(controller, class_drivers),
+    );
+    let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
+    executor.spawn(polling_task);
+    executor.spawn(lifegame_task);
+
+    // x86_64::instructions::interrupts::enable();
+    executor.run();
 }
 
 #[panic_handler]

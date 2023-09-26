@@ -1,5 +1,5 @@
 extern crate alloc;
-use core::alloc::Allocator;
+use core::alloc::{Allocator, Layout};
 
 use alloc::boxed::Box;
 use xhci::ring::trb::{self, transfer};
@@ -19,6 +19,7 @@ pub struct TransferRing<A: Allocator> {
     trb_buffer: Box<[TrbRaw], A>,
     write_index: usize,
     cycle_bit: bool,
+    cycle_count: usize,
 }
 
 impl TransferRing<&'static GlobalAllocator> {
@@ -40,6 +41,7 @@ impl TransferRing<&'static GlobalAllocator> {
             trb_buffer,
             write_index,
             cycle_bit,
+            cycle_count: 0,
         }
     }
 
@@ -52,24 +54,66 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn fill_with_normal(&mut self, buf_size: usize) {
-        for idx in 0..(self.buffer_len() - 1) {
-            self.dump_state();
+        for _idx in 0..(self.buffer_len() - 1) {
             let mut normal = transfer::Normal::new();
-            let buf = alloc::vec![0u8; buf_size];
+            let layout = Layout::from_size_align(buf_size, PAGE_SIZE).unwrap();
+            let buf = unsafe { alloc::alloc::alloc_zeroed(layout) };
             normal
-                .set_data_buffer_pointer(buf.as_ptr() as u64)
-                .set_trb_transfer_length(buf.len() as u32)
+                .set_data_buffer_pointer(buf as u64)
+                .set_trb_transfer_length(buf_size as u32)
                 .set_td_size(0)
                 .set_interrupt_on_completion()
                 .set_interrupt_on_short_packet()
                 .set_interrupter_target(0);
             self.push(transfer::Allowed::Normal(normal));
+            // self.dump_state();
         }
     }
 
+    pub fn flip_cycle_bit_at(&mut self, trb_pointer: u64) {
+        log::debug!(
+            "writing trb_ptr: {:p} in [{:p} - {:p}]",
+            trb_pointer as *const TrbRaw,
+            self.trb_buffer.as_ptr(),
+            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
+        );
+        log::debug!("buffer_range: {:x?}", self.buffer_range());
+        let write_index = self
+            .buffer_range()
+            .position(|i| i == trb_pointer as usize)
+            .unwrap()
+            / core::mem::size_of::<TrbRaw>();
+        log::debug!("write_index: {}", write_index);
+        assert_ne!(write_index, self.trb_buffer.len() - 1);
+        self.write_index = write_index;
+        self.trb_buffer[write_index].toggle_cycle_bit();
+
+        self.write_index += 1;
+        if self.write_index == self.trb_buffer.len() - 1 {
+            self.cycle_count += 1;
+            log::debug!("end of the ring");
+            // reached end of the ring
+            let mut link = trb::Link::new();
+            link.set_ring_segment_pointer(self.trb_buffer.as_ptr() as u64);
+            link.set_toggle_cycle();
+            if self.cycle_bit {
+                link.set_cycle_bit();
+            } else {
+                link.clear_cycle_bit();
+            }
+            self.trb_buffer[self.write_index]
+                .write_in_order(TrbRaw::new_unchecked(link.into_raw()));
+
+            self.write_index = 0;
+            self.toggle_cycle_bit();
+        }
+        // serial_println!("cycle_count: {}", self.cycle_count);
+        // self.dump_state();
+    }
+
     pub fn buffer_range(&self) -> core::ops::Range<usize> {
-        let base_ptr = self.buffer_ptr() as *const TrbRaw as usize;
-        base_ptr..(base_ptr + self.buffer_len())
+        let base_ptr = self.buffer_ptr() as *const TrbRaw;
+        base_ptr as usize..(unsafe { base_ptr.add(self.buffer_len()) } as usize)
     }
 
     pub fn cycle_bit(&self) -> bool {
@@ -117,9 +161,7 @@ impl TransferRing<&'static GlobalAllocator> {
             .unwrap()
         {
             transfer::Allowed::Normal(normal) => {
-                let mut data_buffer_pointer = normal.data_buffer_pointer();
-                data_buffer_pointer = ((data_buffer_pointer & 0x0000_0000_ffff_ffff) << 32)
-                    | ((0xffff_ffff_0000_0000 & data_buffer_pointer) >> 32);
+                let data_buffer_pointer = normal.data_buffer_pointer();
                 cmd.set_data_buffer_pointer(data_buffer_pointer);
                 cmd.set_trb_transfer_length(normal.trb_transfer_length());
             }
@@ -144,15 +186,8 @@ impl TransferRing<&'static GlobalAllocator> {
         self.trb_buffer[self.write_index].write_in_order(TrbRaw::new_unchecked(cmd.into_raw()));
 
         let trb_ptr = &mut self.trb_buffer[self.write_index] as *mut TrbRaw;
-        log::debug!(
-            "writing trb_ptr: {:p} in [{:p} - {:p}]",
-            trb_ptr,
-            self.trb_buffer.as_ptr(),
-            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
-        );
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
-            log::debug!("end of the ring");
             // reached end of the ring
             let mut link = trb::Link::new();
             link.set_ring_segment_pointer(self.trb_buffer.as_ptr() as u64);

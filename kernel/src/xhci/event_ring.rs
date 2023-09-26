@@ -3,12 +3,13 @@ use core::{alloc::Allocator, future::Future, task::Poll};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use bit_field::BitField;
-use spin::Mutex;
+use kernel_lib::mutex::Mutex;
 use static_assertions::const_assert_eq;
 use xhci::{
     accessor::{marker::ReadWrite, Mapper},
     registers::runtime::Interrupter,
     ring::trb::{self, event},
+    Registers,
 };
 
 use crate::{
@@ -75,7 +76,7 @@ pub struct EventRing<A: Allocator> {
 }
 
 impl EventRing<&'static GlobalAllocator> {
-    pub fn new<M: Mapper + Clone>(
+    pub fn new<M: Mapper + Clone + Send + Sync>(
         buf_size: u16,
         primary_interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Self {
@@ -145,6 +146,10 @@ impl EventRing<&'static GlobalAllocator> {
         }
     }
 
+    pub fn pending_already_popped_queue(&self) -> bool {
+        !self.popped.is_empty()
+    }
+
     pub fn cycle_bit(&self) -> bool {
         self.cycle_bit
     }
@@ -157,7 +162,7 @@ impl EventRing<&'static GlobalAllocator> {
         self.popped.pop()
     }
 
-    pub fn pop<M: Mapper + Clone>(
+    pub fn pop<M: Mapper + Clone + Send + Sync>(
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Result<event::Allowed, TrbRaw> {
@@ -186,133 +191,191 @@ impl EventRing<&'static GlobalAllocator> {
         log::debug!("next dequeue ptr: {:p}", next);
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
+            erdp.clear_event_handler_busy();
         });
         event::Allowed::try_from(popped.into_raw()).map_err(TrbRaw::new_unchecked)
     }
 
-    pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone>(
+    pub async fn get_received_transfer_trb_on_slot<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        registers: Arc<Mutex<Registers<M>>>,
         slot_id: u8,
     ) -> trb::event::TransferEvent {
         TransferEventFuture {
             event_ring,
-            interrupter,
+            registers,
             wait_on: TransferEventWaitKind::SlotId(slot_id),
         }
         .await
     }
 
-    pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone>(
+    pub async fn get_received_transfer_trb_on_trb<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        registers: Arc<Mutex<Registers<M>>>,
         trb_pointer: u64,
     ) -> trb::event::TransferEvent {
         log::debug!("wait on trb: 0x{:x}", trb_pointer);
         TransferEventFuture {
             event_ring,
-            interrupter,
+            registers,
             wait_on: TransferEventWaitKind::TrbPtr(trb_pointer),
         }
         .await
     }
 
-    pub async fn get_received_command_trb<M: Mapper + Clone>(
+    pub async fn get_received_command_trb<M: Mapper + Clone + Send + Sync>(
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-        interrupter: &mut Interrupter<'_, M, ReadWrite>,
+        registers: Arc<Mutex<Registers<M>>>,
         trb_ptr: u64,
     ) -> trb::event::CommandCompletion {
         CommandCompletionFuture {
             event_ring,
-            interrupter,
+            registers,
             wait_on: trb_ptr,
         }
         .await
     }
 }
 
-enum TransferEventWaitKind {
+#[derive(Debug, Clone)]
+pub enum TransferEventWaitKind {
     SlotId(u8),
     TrbPtr(u64),
+    TrbPtrs(Vec<u64>),
 }
 
-struct TransferEventFuture<'a, 'b, M: Mapper + Clone> {
+pub struct TransferEventFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-    pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+    pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: TransferEventWaitKind,
 }
 
-impl<'a, 'b, M: Mapper + Clone> Future for TransferEventFuture<'a, 'b, M> {
+impl<M: Mapper + Clone + Send + Sync> TransferEventFuture<M> {
+    pub fn new(
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+        registers: Arc<Mutex<Registers<M>>>,
+        wait_on: TransferEventWaitKind,
+    ) -> Self {
+        Self {
+            event_ring,
+            registers,
+            wait_on,
+        }
+    }
+}
+
+impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     type Output = trb::event::TransferEvent;
 
     fn poll(
         self: core::pin::Pin<&mut Self>,
         _cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
-        // FIXME: this is safe because called member methods does not move them, but their must be a better way
-        let Self {
-            interrupter,
-            event_ring,
-            wait_on,
-        } = unsafe { self.get_unchecked_mut() };
-        let event_ring_trb = unsafe {
-            (interrupter
+        let registers = Arc::clone(&self.registers);
+        let event_ring = Arc::clone(&self.event_ring);
+        let wait_on = &self.wait_on;
+        let event_ring_dequeue_pointer = {
+            let mut registers = kernel_lib::lock!(registers);
+            let interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            interrupter
                 .erdp
                 .read_volatile()
-                .event_ring_dequeue_pointer() as *const trb::Link)
-                .read_volatile()
+                .event_ring_dequeue_pointer() as *const trb::Link
         };
-        let mut event_ring = event_ring.lock();
-        if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
+        let event_ring_trb = unsafe { event_ring_dequeue_pointer.read_volatile() };
+        let event_ring_cycle_bit = {
+            let event_ring = kernel_lib::lock!(event_ring);
+            event_ring.cycle_bit()
+        };
+        if event_ring_trb.cycle_bit() != event_ring_cycle_bit {
             // EventRing does not have front
             return Poll::Pending;
         }
+        let popped_trb = {
+            let mut registers = kernel_lib::lock!(registers);
+            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            let mut event_ring = kernel_lib::lock!(event_ring);
+            event_ring.pop(&mut interrupter)
+        };
         match wait_on {
-            TransferEventWaitKind::SlotId(slot_id) => match event_ring.pop(interrupter) {
+            TransferEventWaitKind::SlotId(slot_id) => match popped_trb {
                 Ok(event::Allowed::TransferEvent(event)) if event.slot_id() == *slot_id => {
                     log::debug!("got event: {:x?}", event);
                     Poll::Ready(event)
                 }
                 Ok(trb) => {
                     // EventRing does not have front
-                    log::warn!("ignoring trb: {:?}", trb);
-                    event_ring.push(trb);
+                    log::warn!("ignoring trb: {:x?}", trb);
+                    {
+                        let mut event_ring = kernel_lib::lock!(event_ring);
+                        event_ring.push(trb);
+                    }
                     Poll::Pending
                 }
                 Err(trb) => {
-                    log::info!("ignoring err...: {:?}", trb);
+                    log::info!("ignoring err...: {:x?}", trb);
                     Poll::Pending
                 }
             },
             TransferEventWaitKind::TrbPtr(ptr) => {
-                match event_ring.pop(interrupter) {
+                match popped_trb {
                     Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
                         log::debug!("got event: {:?}", event);
                         Poll::Ready(event)
                     }
                     Ok(trb) => {
                         // EventRing does not have front
-                        log::warn!("ignoring trb: {:?}", trb);
-                        event_ring.push(trb);
+                        log::warn!("ignoring trb: {:x?}", trb);
+                        {
+                            let mut event_ring = kernel_lib::lock!(event_ring);
+                            event_ring.push(trb);
+                        }
                         Poll::Pending
                     }
                     Err(trb) => {
-                        log::info!("ignoring err...: {:?}", trb);
+                        log::info!("ignoring err...: {:x?}", trb);
                         Poll::Pending
                     }
                 }
+            }
+            TransferEventWaitKind::TrbPtrs(ptrs) => {
+                for ptr in ptrs {
+                    match &popped_trb {
+                        Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
+                            log::debug!("got event: {:?}", event);
+                            return Poll::Ready(*event);
+                        }
+                        Ok(_trb) => {
+                            // ignoring...
+                        }
+                        Err(trb) => {
+                            log::info!("ignoring err...: {:x?}", trb);
+
+                            return Poll::Pending;
+                        }
+                    }
+                }
+
+                // EventRing does not have front
+                log::warn!("ignoring trb: {:x?} for {:?}", &popped_trb, ptrs);
+                {
+                    let mut event_ring = kernel_lib::lock!(event_ring);
+                    event_ring.push(popped_trb.unwrap());
+                }
+
+                Poll::Pending
             }
         }
     }
 }
 
-struct CommandCompletionFuture<'a, 'b, M: Mapper + Clone> {
+struct CommandCompletionFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
-    pub interrupter: &'a mut Interrupter<'b, M, ReadWrite>,
+    pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: u64, // trb_ptr
 }
 
-impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
+impl<M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture<M> {
     type Output = trb::event::CommandCompletion;
 
     fn poll(
@@ -321,23 +384,31 @@ impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
     ) -> core::task::Poll<Self::Output> {
         // FIXME: this is safe because called member methods does not move them, but their must be a better way
         let Self {
-            interrupter,
+            registers,
             event_ring,
             wait_on,
         } = unsafe { self.get_unchecked_mut() };
         let event_ring_trb = unsafe {
-            (interrupter
+            let mut registers = kernel_lib::lock!(registers);
+            (registers
+                .interrupter_register_set
+                .interrupter_mut(0)
                 .erdp
                 .read_volatile()
                 .event_ring_dequeue_pointer() as *const trb::Link)
                 .read_volatile()
         };
-        let mut event_ring = event_ring.lock();
+        let mut event_ring = kernel_lib::lock!(event_ring);
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
             return Poll::Pending;
         }
-        match event_ring.pop(interrupter) {
+        let trb = {
+            let mut registers = kernel_lib::lock!(registers);
+            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
+            event_ring.pop(&mut interrupter)
+        };
+        match trb {
             Ok(event::Allowed::CommandCompletion(event))
                 if event.command_trb_pointer() == *wait_on =>
             {
@@ -349,7 +420,7 @@ impl<'a, 'b, M: Mapper + Clone> Future for CommandCompletionFuture<'a, 'b, M> {
                 Poll::Pending
             }
             Err(trb) => {
-                log::info!("ignoring err...: {:?}", trb);
+                log::info!("ignoring err...: {:x?}", trb);
                 Poll::Pending
             }
         }

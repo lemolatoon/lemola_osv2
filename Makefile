@@ -31,15 +31,25 @@ disk.img: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel
 	sudo cp kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf mnt/kernel.elf && \
 	sudo umount mnt
 
+install: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf
+	mkdir -p mnt && \
+	sudo mount -t drvfs e: mnt && \
+	sudo mkdir -p mnt/EFI/BOOT && \
+	sudo cp bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi mnt/EFI/BOOT/BOOTX64.EFI && \
+	sudo cp kernel/target/x86_64-lemolaos-eabi/$(PROFILE)/kernel.elf mnt/kernel.elf && \
+	sudo umount mnt
+
 run: disk.img
 	$(QEMU) \
 		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
 		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw,readonly \
 		-drive file=disk.img,format=raw \
 		-device nec-usb-xhci,id=xhci \
- 		-device usb-mouse \
 		-device usb-kbd \
+ 		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
+		-no-reboot \
+		-no-shutdown \
 		-monitor stdio
 # for serial port
 # telnet localhost 5555
@@ -54,6 +64,8 @@ run_gdb: disk.img
 		-device usb-mouse \
 		-serial telnet::5555,server,nowait \
 		-monitor stdio \
+		-no-reboot \
+		-no-shutdown \
 		-gdb tcp::12345 -S
 # on gdb
 # target remote localhost:12345

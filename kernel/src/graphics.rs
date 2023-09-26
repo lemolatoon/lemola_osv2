@@ -1,12 +1,12 @@
 use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
+use kernel_lib::mutex::Mutex;
 use kernel_lib::{
     logger::{CharWriter, DecoratedLog},
     AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,
 };
 use once_cell::unsync::OnceCell;
-use spin::Mutex;
 
 use crate::serial_print;
 
@@ -213,7 +213,7 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
             }
         }
     }
-    let writer = WRITER.0.lock();
+    let writer = kernel_lib::lock!(WRITER.0);
     let pixcel_writer =
         PixcelWriterBuilder::get_writer(&graphics_info, unsafe { &mut UNSAFE_WRITER_BUF });
     writer.get_or_init(|| {
@@ -252,7 +252,7 @@ impl log::Log for SerialAndVgaCharWriter {
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            if record.level() <= log::Level::Info {
+            if record.level() <= log::LevelFilter::Info {
                 let mut serial_vga_writer = InstantWriter::new(|s| {
                     serial_print!("{}", s);
                     crate::print!("{}", s)
@@ -267,17 +267,14 @@ impl log::Log for SerialAndVgaCharWriter {
                 .unwrap();
             } else {
                 // let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
-                let mut serial_writer = InstantWriter::new(|s| {
-                    serial_print!("{}", s);
-                });
-                DecoratedLog::write(
-                    &mut serial_writer,
-                    record.level(),
-                    record.args(),
-                    record.file().unwrap_or("<unknown>"),
-                    record.line().unwrap_or(0),
-                )
-                .unwrap();
+                // DecoratedLog::write(
+                //     &mut serial_writer,
+                //     record.level(),
+                //     record.args(),
+                //     record.file().unwrap_or("<unknown>"),
+                //     record.line().unwrap_or(0),
+                // )
+                // .unwrap();
             }
         }
     }
@@ -300,6 +297,13 @@ macro_rules! print {
 }
 
 #[macro_export]
+macro_rules! print_and_flush {
+    ($($arg:tt)*) => {{
+        $crate::graphics::_print_and_flush(format_args!($($arg)*));
+    }};
+}
+
+#[macro_export]
 macro_rules! println {
     () => ($crate::print!("\n"));
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
@@ -308,11 +312,22 @@ macro_rules! println {
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    WRITER
-        .0
-        .lock()
-        .get_mut()
-        .expect("WRITER NOT INITIALIZED")
-        .write_fmt(args)
-        .unwrap();
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        kernel_lib::lock!(WRITER.0)
+            .get_mut()
+            .expect("WRITER NOT INITIALIZED")
+            .write_fmt(args)
+            .unwrap();
+    });
+}
+
+#[doc(hidden)]
+pub fn _print_and_flush(args: fmt::Arguments) {
+    use core::fmt::Write;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut writer = kernel_lib::lock!(WRITER.0);
+        let writer = writer.get_mut().expect("WRITER NOT INITIALIZED");
+        writer.write_fmt(args).unwrap();
+        writer.flush();
+    });
 }

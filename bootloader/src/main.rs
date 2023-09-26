@@ -47,6 +47,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     reset_text_output(boot_services);
 
     log::info!("Hello from uefi.rs");
+    log::set_max_level(log::LevelFilter::Info);
 
     let buf_size = boot_services.memory_map_size().map_size + 1024;
     let mut dont_use_this_uninit_buf: Vec<u8> = Vec::with_capacity(buf_size);
@@ -117,15 +118,15 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let elf = match ElfBytes::<AnyEndian>::minimal_parse(&kernel_buffer) {
         Ok(elf) => {
             // for program_header in elf.ehdr {
-            //     log::info!("program_header: {:?}", program_header);
+            //     log::debug!("program_header: {:?}", program_header);
             // }
             for section_header in elf.section_headers().unwrap() {
-                log::info!("section_header: {:?}", section_header);
+                log::debug!("section_header: {:?}", section_header);
             }
             // let (system_table, string_table) = elf.symbol_table().unwrap().unwrap();
-            // log::info!("system_table: {:?}", system_table);
-            // log::info!("string_table: {:?}", string_table);
-            log::info!("elf.ehdr: {:?}", elf.ehdr);
+            // log::debug!("system_table: {:?}", system_table);
+            // log::debug!("string_table: {:?}", string_table);
+            log::debug!("elf.ehdr: {:?}", elf.ehdr);
             elf
         }
         Err(err) => {
@@ -134,7 +135,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     };
 
     let (load_min_addr, load_max_addr) = calc_load_address_range(&elf);
-    log::info!(
+    log::debug!(
         "kernel will be loaded at {:#x} - {:#x}",
         load_min_addr,
         load_max_addr
@@ -150,7 +151,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             panic!("Failed to allocate_pages, {:?}", err);
         }
     };
-    log::info!(
+    log::debug!(
         "memory allocated: {:#x} - {:#x}",
         allocated_pointer,
         allocated_pointer + n_pages as u64 * 4 * 1024
@@ -174,22 +175,22 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             })
             .unwrap()
             .ty;
-    log::info!(
+    log::debug!(
         "MemoryType at {:#x} before: {:?}",
         allocated_pointer,
         memory_type_at_allocated_pointer_before
     );
-    log::info!(
+    log::debug!(
         "MemoryType at {:#x}: {:?}",
         allocated_pointer,
         memory_type_at_allocated_pointer
     );
     unsafe { copy_load_segments(&elf, &kernel_buffer) };
     let entry_point = elf.ehdr.e_entry;
-    log::info!("entry_point: {:#x}", entry_point);
+    log::debug!("entry_point: {:#x}", entry_point);
     unsafe { pretty_print_entry_point_asm(entry_point) };
     let graphics_info = construct_graphics_info(boot_services);
-    log::info!("graphics_frame_buffer: {:?}", graphics_info);
+    log::debug!("graphics_frame_buffer: {:?}", graphics_info);
 
     drop(file_protocol);
     // exit_boot_services before boot
@@ -223,14 +224,14 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 }
 
 fn construct_graphics_info(boot_services: &BootServices) -> GraphicsInfo {
-    log::info!("Start construct_graphics_info");
+    log::debug!("Start construct_graphics_info");
     let gop = match boot_services.locate_handle_buffer(SearchType::from_proto::<GraphicsOutput>()) {
         Ok(gop) => gop,
         Err(err) => {
             panic!("Failed to locate_handle_buffer, {:?}", err);
         }
     };
-    log::info!("gop_handles: {:?}", gop.handles());
+    log::debug!("gop_handles: {:?}", gop.handles());
     let mut gop = match boot_services.open_protocol_exclusive::<GraphicsOutput>(gop.handles()[1]) {
         Ok(gop) => gop,
         Err(err) => {
@@ -255,7 +256,7 @@ fn construct_graphics_info(boot_services: &BootServices) -> GraphicsInfo {
         frame_buffer.as_mut_ptr(),
         pixcel_format,
     );
-    log::info!("End construct_graphics_info");
+    log::debug!("End construct_graphics_info");
     buffer
 }
 
@@ -327,7 +328,7 @@ unsafe fn copy_load_segments(elf: &ElfBytes<AnyEndian>, kernel_loaded_buffer: &[
             // copy .elf content
             unsafe { core::ptr::copy_nonoverlapping(segment_ptr, to, len) };
             // fill zero
-            log::info!(
+            log::debug!(
                 "p_memsz: 0x{:x}, p_filesz: 0x{:x}",
                 program_header.p_memsz,
                 program_header.p_filesz
@@ -355,7 +356,7 @@ fn get_memory_map_iter<'buf>(
     buf: &'buf mut [u8],
 ) -> impl ExactSizeIterator<Item = &'buf MemoryDescriptor> + Clone {
     let len = buf.len();
-    log::info!("memory_map buffer address: {:p}", buf.as_ptr());
+    log::debug!("memory_map buffer address: {:p}", buf.as_ptr());
     let (_, iter) = match boot_services.memory_map(unsafe { core::mem::transmute(buf) }) {
         Ok(ret) => ret,
         Err(err) => {
@@ -370,7 +371,7 @@ where
     'buf: 'a, // 'buf must live longer than 'a.
 {
     for memory_descriptor in iter {
-        log::info!(
+        log::debug!(
             "{{ addr: [ {:#010x} - {:#010x} ], type: {:?}, size: {:#06} KiB }}",
             memory_descriptor.phys_start,
             memory_descriptor.page_count * 4 * 1024 + memory_descriptor.phys_start - 1,

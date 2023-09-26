@@ -4,8 +4,8 @@ use core::{
 };
 
 extern crate alloc;
+use crate::mutex::Mutex;
 use alloc::boxed::Box;
-use spin::Mutex;
 
 struct FixedLengthAllocatorInner<const SIZE: usize> {
     heap: [u8; SIZE],
@@ -57,7 +57,7 @@ fn ceil(value: usize, alignment: usize) -> usize {
 
 unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
     unsafe fn alloc(&self, layout: Layout, boundary: usize) -> *mut u8 {
-        let mut allocator = self.0.lock();
+        let mut allocator = crate::lock!(self.0);
         let start = allocator.next;
         let current_ptr = allocator.heap.as_mut_ptr().add(start);
         let mut alloc_ptr = ceil(current_ptr as usize, layout.align());

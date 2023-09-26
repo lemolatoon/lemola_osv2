@@ -3,8 +3,8 @@ use core::{alloc::Allocator, mem::MaybeUninit, ptr::NonNull};
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
-use kernel_lib::{await_once_noblocking, await_sync};
-use spin::Mutex;
+use bit_field::BitField;
+use kernel_lib::{await_sync, mutex::Mutex};
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, SetupPacket,
 };
@@ -22,13 +22,16 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_with_boundary_with_default_else, GlobalAllocator},
     usb::{
-        class_driver::mouse,
+        class_driver::{keyboard, mouse},
         descriptor::DescriptorIter,
         setup_packet::{SetupPacketRaw, SetupPacketWrapper},
         traits::AsyncUSBHost,
     },
     xhci::{
-        command_ring::CommandRing, event_ring::EventRing, transfer_ring::TransferRing, trb::TrbRaw,
+        command_ring::CommandRing,
+        event_ring::{EventRing, TransferEventFuture, TransferEventWaitKind},
+        transfer_ring::TransferRing,
+        trb::TrbRaw,
     },
 };
 
@@ -69,7 +72,7 @@ impl DeviceContextWrapper {
 }
 
 #[derive(Debug)]
-pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
+pub struct DeviceContextInfo<M: Mapper + Clone + Send + Sync, A: Allocator> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     command_ring: Arc<Mutex<CommandRing>>,
@@ -82,7 +85,7 @@ pub struct DeviceContextInfo<M: Mapper + Clone, A: Allocator> {
     transfer_rings: [Option<Box<TransferRing<A>, A>>; 31],
 }
 
-impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn new(
         port_index: usize,
         slot_id: usize,
@@ -107,6 +110,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 [Option<Box<TransferRing<&'static GlobalAllocator>, &'static GlobalAllocator>>; 31],
             >(transfer_rings)
         };
+        // 4.3.3 Device Slot Initialization
+        // 4. Allocate and initialize the Transfer Ring for Default Control Endpoint...
         transfer_rings[0] = Some(TransferRing::alloc_new(TRANSFER_RING_BUF_SIZE));
         Self {
             registers,
@@ -115,7 +120,10 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             slot_id,
             port_index,
             descriptors: None,
+            // 4.3.3 Device Slot Initialization
+            // 1. Allocate an Input Context ...
             input_context: InputContextWrapper::new(), // 0 filled
+            // 6. Allocate the Output Device Context data structure (6.2.1)...
             device_context: DeviceContextWrapper::new(), // 0 filled
             transfer_rings,
         }
@@ -133,6 +141,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn enable_slot_context(&mut self) {
         use xhci::context::InputHandler;
         let control = self.input_context.0.control_mut();
+        // 6.2.5.1 Input Control Context
+        // set A0
         control.set_add_context_flag(0);
     }
 
@@ -143,11 +153,16 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     }
 
     pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
+        // 4.3.3 Device Slot Initialization
+        // 3. Initialize the Input Slot Context data structure (6.2.2)
         use xhci::context::InputHandler;
         log::debug!("initialize_slot_context: port_id: {}", port_id);
         let slot_context = self.input_context.0.device_mut().slot_mut();
+        // Route String = Topology defined. (To access a device attached directly to a Root Hub port, the Route String shall equal '0'.)
         slot_context.set_route_string(0);
+        // and the Root Hub Port Number shall indicate the specific Root Hub port to use.
         slot_context.set_root_hub_port_number(port_id);
+        // Context Entries = 1
         slot_context.set_context_entries(1);
         slot_context.set_speed(port_speed);
     }
@@ -192,6 +207,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         transfer_ring_dequeue_pointer: u64,
         max_packet_size: u16,
     ) {
+        // 4.3.3 Device Slot Initialization
+        // 5. Initialize the Input default control Endpoint 0 Context (6.2.3)
         use xhci::context::InputHandler;
         let endpoint_context_0_id = DeviceContextIndex::ep0();
         let endpoint0_context = self
@@ -201,26 +218,36 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             .endpoint_mut(endpoint_context_0_id.address() as usize);
 
         log::debug!("max_packet_size: {}", max_packet_size);
+        // EP Type = Control
         endpoint0_context.set_endpoint_type(EndpointType::Control);
+        // Max Packet Size
         endpoint0_context.set_max_packet_size(max_packet_size);
+        // Max Burst Size = 0
         endpoint0_context.set_max_burst_size(0);
+        // TR Dequeue Pointer = Start address of first segment of the Default Control Endpoint Transfer Ring
         endpoint0_context.set_tr_dequeue_pointer(transfer_ring_dequeue_pointer);
+        // Dequeue Cycle State(DCS) = 1
         endpoint0_context.set_dequeue_cycle_state();
+        // interval = 0
         endpoint0_context.set_interval(0);
+        // Max Primary Streams (MaxPStreams) = 0
         endpoint0_context.set_max_primary_streams(0);
+        // Mult = 0
         endpoint0_context.set_mult(0);
+        // Error Count(CErr) = 3
         endpoint0_context.set_error_count(3);
+
+        // 6.2.3 Endpoint Context
+        // Note: Software shall set Average TRB Length to ‘8’ for control endpoints.
+        endpoint0_context.set_average_trb_length(8);
     }
 
-    pub async fn start_initialization<MF, KF>(
-        &mut self,
-        class_drivers: &mut ClassDriverManager<MF, KF>,
-    ) where
+    pub async fn start_initialization<MF, KF>(&mut self, class_drivers: &ClassDriverManager<MF, KF>)
+    where
         MF: Fn(u8, &[u8]),
         KF: Fn(u8, &[u8]),
     {
         let device_descriptor = self.request_device_descriptor().await;
-        #[cfg(debug)]
         {
             let buffer_len = self
                 .transfer_ring_at(DeviceContextIndex::ep0())
@@ -267,16 +294,40 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 }
             }
             if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let _address = self.device_address();
-                log::warn!("boot keyboard interface ignored");
-                // class_drivers
-                //     .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                //     .unwrap();
-                // class_drivers
-                //     .keyboard()
-                //     .1
-                //     .tick_until_running_state(self)
-                //     .unwrap();
+                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
+                let address = self.device_address();
+                log::info!("add keyboard device");
+                class_drivers
+                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                    .unwrap();
+                {
+                    let mut driver_info = kernel_lib::lock!(class_drivers.keyboard());
+                    driver_info.driver.tick_until_running_state(self).unwrap();
+                    let ep = driver_info.driver.endpoints_mut(address)[0]
+                        .as_mut()
+                        .unwrap();
+                    await_sync!(self.init_transfer_ring_for_interrupt_at(
+                        ep,
+                        endpoint_descriptor.as_ref().unwrap()
+                    ))
+                    .unwrap();
+                };
+                let transfer_ring = self
+                    .transfer_ring_at_mut(dci)
+                    .as_mut()
+                    .expect("transfer ring not allocated")
+                    .as_mut();
+                transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
+                {
+                    // door-bell
+                    let mut registers = kernel_lib::lock!(self.registers);
+                    registers
+                        .doorbell
+                        .update_volatile_at(self.slot_id(), |doorbell| {
+                            doorbell.set_doorbell_target(dci.address());
+                            doorbell.set_doorbell_stream_id(0);
+                        });
+                }
             }
             if let Some(_mouse_interface) = mouse_interface {
                 let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
@@ -284,12 +335,34 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 class_drivers
                     .add_mouse_device(self.slot_id(), device_descriptor, address)
                     .unwrap();
-                class_drivers
-                    .mouse()
-                    .1
-                    .tick_until_running_state(self)
+                {
+                    let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
+                    driver_info.driver.tick_until_running_state(self).unwrap();
+                    let ep = driver_info.driver.endpoints_mut(address)[0]
+                        .as_mut()
+                        .unwrap();
+                    await_sync!(self.init_transfer_ring_for_interrupt_at(
+                        ep,
+                        endpoint_descriptor.as_ref().unwrap()
+                    ))
                     .unwrap();
-
+                };
+                let transfer_ring = self
+                    .transfer_ring_at_mut(dci)
+                    .as_mut()
+                    .expect("transfer ring not allocated")
+                    .as_mut();
+                transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
+                {
+                    // door-bell
+                    let mut registers = kernel_lib::lock!(self.registers);
+                    registers
+                        .doorbell
+                        .update_volatile_at(self.slot_id(), |doorbell| {
+                            doorbell.set_doorbell_target(dci.address());
+                            doorbell.set_doorbell_stream_id(0);
+                        });
+                }
             }
         } else {
             log::warn!("unknown device class: {}", device_descriptor.b_device_class);
@@ -302,7 +375,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         endpoint_id: EndpointId,
         setup_data: SetupPacketWrapper,
         buf: Option<NonNull<[u8]>>,
-    ) -> u64 {
+    ) -> TransferEventWaitKind {
         let dci: DeviceContextIndex = endpoint_id.address();
         log::debug!(
             "control_in: setup_data: {:?}, ep addr: {:?}",
@@ -318,7 +391,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
 
         let setup_data = SetupPacketRaw::from(setup_data.0);
         let mut status_trb = transfer::StatusStage::new();
-        let wait_on = if let Some(buf) = buf {
+        let wait_ons = if let Some(buf) = buf {
             let buf = unsafe { buf.as_ref() };
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
@@ -328,7 +401,8 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 .set_index(setup_data.w_index)
                 .set_length(setup_data.w_length)
                 .set_transfer_type(TransferType::In);
-            transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb));
+            let setup_trb_ptr =
+                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
 
             let mut data_stage_trb = transfer::DataStage::new();
             data_stage_trb
@@ -341,8 +415,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             let data_trb_ref_in_ring =
                 transfer_ring.push(transfer::Allowed::DataStage(data_stage_trb)) as u64;
 
-            transfer_ring.push(transfer::Allowed::StatusStage(status_trb));
-            data_trb_ref_in_ring
+            let status_trb_ptr =
+                transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64;
+            alloc::vec![setup_trb_ptr, data_trb_ref_in_ring, status_trb_ptr]
         } else {
             let mut setup_stage_trb = transfer::SetupStage::new();
             setup_stage_trb
@@ -352,13 +427,17 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 .set_index(setup_data.w_index)
                 .set_length(setup_data.w_length)
                 .set_transfer_type(TransferType::No);
-            transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb));
+            let setup_stage_trb_ptr =
+                transfer_ring.push(transfer::Allowed::SetupStage(setup_stage_trb)) as u64;
 
             status_trb.set_direction().set_interrupt_on_completion();
-            transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64
+            let status_trb_ptr =
+                transfer_ring.push(transfer::Allowed::StatusStage(status_trb)) as u64;
+
+            alloc::vec![setup_stage_trb_ptr, status_trb_ptr]
         };
 
-        let mut registers = self.registers.lock();
+        let mut registers = kernel_lib::lock!(self.registers);
         log::debug!(
             "slot_id: {:?}, dci.address(): {}",
             self.slot_id,
@@ -371,7 +450,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 ring.set_doorbell_target(dci.address());
                 ring.set_doorbell_stream_id(0);
             });
-        wait_on
+        TransferEventWaitKind::TrbPtrs(wait_ons)
     }
 
     pub async fn async_control_transfer(
@@ -398,10 +477,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             self.push_control_transfer(endpoint_id, setup_packet, buf.map(|buf| buf[..].into()));
         let event_ring = Arc::clone(&self.event_ring);
         let trb = {
-            let mut registers = self.registers.lock();
-            let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-            EventRing::get_received_transfer_trb_on_trb(event_ring, &mut interrupter, trb_wait_on)
-                .await
+            TransferEventFuture::new(event_ring, Arc::clone(&self.registers), trb_wait_on).await
         };
         match trb.completion_code() {
             Ok(event::CompletionCode::ShortPacket) => {}
@@ -410,7 +486,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             }
             Ok(err) => {
                 log::error!("err: {:?}", err);
-                return Err(usb_host::TransferError::Permanent("CompletionCode error"));
+                return Err(usb_host::TransferError::Retry("CompletionCode error"));
             }
             Err(err) => {
                 log::debug!("err: {:?}", err);
@@ -429,8 +505,9 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     ) -> Result<bool, usb_host::TransferError> {
         use xhci::context::InputHandler;
         let dci = DeviceContextIndex::from(endpoint_descriptor);
+        log::debug!("dci: {:?}", dci);
         let portsc = {
-            let registers = self.registers.lock();
+            let registers = kernel_lib::lock!(self.registers);
             registers
                 .port_register_set
                 .read_volatile_at(self.port_index)
@@ -457,15 +534,16 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                         endpoint_context.set_dequeue_cycle_state();
                         endpoint_context.set_error_count(3);
                         endpoint_context.set_max_packet_size(ep.max_packet_size());
-                        endpoint_context.set_average_trb_length(8); // TODO: set this correctly
+                        endpoint_context.set_average_trb_length(1); // TODO: set this correctly
                         endpoint_context.set_max_burst_size(0);
                         endpoint_context.set_max_primary_streams(0);
                         endpoint_context.set_max_endpoint_service_time_interval_payload_low(
                             ep.max_packet_size(),
                         );
                         endpoint_context.set_mult(0);
+                        log::debug!("port speed: {}", portsc.port_speed());
                         let interval = match portsc.port_speed() {
-                        1 /* FullSpeed */ | 2 /* LowSpeed */ => endpoint_descriptor.b_interval.ilog2() as u8 + 3,
+                        1 /* FullSpeed */ | 2 /* LowSpeed */ => endpoint_descriptor.b_interval.reverse_bits().get_bit(0) /* most significant bit */ as u8 + 3,
                         3 /* HighSpeed */ | 4 /* SuperSpeed */ => endpoint_descriptor.b_interval - 1,
                         _ => return Err(usb_host::TransferError::Permanent("Unknown speed")),
                     };
@@ -488,17 +566,19 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
                 );
                 trb.set_slot_id(self.slot_id() as u8);
                 let trb_ptr = {
-                    let mut command_ring = self.command_ring.lock();
+                    let mut command_ring = kernel_lib::lock!(self.command_ring);
                     command_ring.push(command::Allowed::ConfigureEndpoint(trb))
                 } as u64;
+                {
+                    let mut registers = kernel_lib::lock!(self.registers);
+                    registers.doorbell.update_volatile_at(0, |doorbell| {
+                        doorbell.set_doorbell_target(0);
+                        doorbell.set_doorbell_stream_id(0);
+                    });
+                }
                 let event_ring = Arc::clone(&self.event_ring);
-                let mut registers = self.registers.lock();
-                registers.doorbell.update_volatile_at(0, |doorbell| {
-                    doorbell.set_doorbell_target(0);
-                    doorbell.set_doorbell_stream_id(0);
-                });
-                let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-                EventRing::get_received_command_trb(event_ring, &mut interrupter, trb_ptr).await
+                let registers = Arc::clone(&self.registers);
+                EventRing::get_received_command_trb(event_ring, registers, trb_ptr).await
             };
             match trb.completion_code() {
                 Ok(event::CompletionCode::Success) => {
@@ -521,7 +601,6 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         ep: &mut (dyn usb_host::Endpoint + Send + Sync),
         buf: &mut [u8],
     ) -> Result<usize, usb_host::TransferError> {
-        use xhci::context::InputHandler;
         if self.descriptors.is_none() {
             self.request_config_descriptor_and_rest().await;
         }
@@ -550,6 +629,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             ep.transfer_type(),
             usb_host::TransferType::Interrupt
         ));
+        log::debug!("dci: {:?}", dci);
         self.init_transfer_ring_for_interrupt_at(ep, &endpoint_descriptor)
             .await?;
 
@@ -567,23 +647,26 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
         transfer_ring.push(transfer::Allowed::Normal(normal));
 
         let slot_id = self.slot_id();
-        let mut registers = self.registers.lock();
-        registers
-            .doorbell
-            .update_volatile_at(self.slot_id(), |doorbell| {
-                doorbell.set_doorbell_target(dci.address());
-                doorbell.set_doorbell_stream_id(0);
-            });
-        let mut interrupter = registers.interrupter_register_set.interrupter_mut(0);
-        log::debug!("before debug");
-        let trb = EventRing::get_received_transfer_trb_on_slot(
-            event_ring,
-            &mut interrupter,
-            slot_id as u8,
-        )
-        .await;
+        {
+            let mut registers = kernel_lib::lock!(self.registers);
+            registers
+                .doorbell
+                .update_volatile_at(self.slot_id(), |doorbell| {
+                    doorbell.set_doorbell_target(dci.address());
+                    doorbell.set_doorbell_stream_id(0);
+                });
+        }
+        // TODO: ここでawaitをまたいでlockを保持しているのがdeadlockになっているので、registersをArc::cloneして渡すようにする
+        let trb = {
+            log::debug!("before debug");
+            EventRing::get_received_transfer_trb_on_slot(
+                event_ring,
+                Arc::clone(&self.registers),
+                slot_id as u8,
+            )
+            .await
+        };
         let transferred_length = trb.trb_transfer_length();
-        drop(registers);
 
         let transfer_ring = self.transfer_ring_at_mut(dci).as_mut().unwrap();
         transfer_ring.dump_state();
@@ -602,10 +685,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
             transfer::Allowed::EventData(_) => todo!(),
             transfer::Allowed::Noop(_) => todo!(),
             transfer::Allowed::Normal(normal) => {
-                let mut normal_data_buffer_pointer = normal.data_buffer_pointer();
-                normal_data_buffer_pointer = (normal_data_buffer_pointer & 0x0000_0000_ffff_ffff)
-                    << 32
-                    | (normal_data_buffer_pointer & 0xffff_ffff_0000_0000) >> 32;
+                let normal_data_buffer_pointer = normal.data_buffer_pointer();
                 let copying_length = core::cmp::min(transferred_length, buf.len() as u32);
                 let buffer = unsafe {
                     core::slice::from_raw_parts(
@@ -636,7 +716,7 @@ impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
     }
 }
 
-impl<M: Mapper + Clone> DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAllocator> {
     // request descriptor impls
 
     pub async fn request_device_descriptor(&mut self) -> DeviceDescriptor {
@@ -844,7 +924,9 @@ impl usb_host::Endpoint for EndpointId {
     }
 }
 
-impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static GlobalAllocator> {
+impl<M: Mapper + Clone + Send + Sync> usb_host::USBHost
+    for DeviceContextInfo<M, &'static GlobalAllocator>
+{
     fn control_transfer(
         &mut self,
         ep: &mut dyn usb_host::Endpoint,
@@ -855,7 +937,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
         // Returned None means the transfer is Pending yet
-        await_once_noblocking!(self.async_control_transfer(
+        await_sync!(self.async_control_transfer(
             unsafe { core::mem::transmute(ep) },
             bm_request_type,
             b_request,
@@ -863,7 +945,6 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
             w_index,
             buf
         ))
-        .unwrap_or(Err(usb_host::TransferError::Retry("transfer is pending")))
     }
 
     fn in_transfer(
@@ -887,7 +968,7 @@ impl<M: Mapper + Clone> usb_host::USBHost for DeviceContextInfo<M, &'static Glob
 }
 
 #[async_trait]
-impl<M: Mapper + Clone + Sync + Send> AsyncUSBHost
+impl<M: Mapper + Clone + Send + Sync + Sync + Send> AsyncUSBHost
     for DeviceContextInfo<M, &'static GlobalAllocator>
 {
     async fn control_transfer(

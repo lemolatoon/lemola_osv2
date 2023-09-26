@@ -1,9 +1,9 @@
+use crate::mutex::Mutex;
 use crate::Writer;
 use core::fmt;
 use core::fmt::Write;
 use log;
 use once_cell::unsync::OnceCell;
-use spin::Mutex;
 
 pub struct DecoratedLog<'writer, 'a, W: fmt::Write> {
     writer: &'writer mut W,
@@ -78,7 +78,7 @@ impl<const N_CHAR_PER_LINE: usize, const N_WRITEABLE_LINE: usize>
     pub fn lock(
         &self,
     ) -> spin::MutexGuard<'_, OnceCell<Writer<'static, N_WRITEABLE_LINE, N_CHAR_PER_LINE>>> {
-        self.0.lock()
+        crate::lock!(self.0)
     }
 }
 
@@ -86,12 +86,12 @@ impl<const N_CHAR_PER_LINE: usize, const N_WRITEABLE_LINE: usize> log::Log
     for CharWriter<N_CHAR_PER_LINE, N_WRITEABLE_LINE>
 {
     fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        self.0.lock().get().is_some()
+        crate::lock!(self.0).get().is_some()
     }
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            let mut guard = self.0.lock();
+            let mut guard = crate::lock!(self.0);
             let writer = guard.get_mut().unwrap();
             DecoratedLog::write(
                 writer,
@@ -105,7 +105,7 @@ impl<const N_CHAR_PER_LINE: usize, const N_WRITEABLE_LINE: usize> log::Log
     }
 
     fn flush(&self) {
-        let mut guard = self.0.lock();
+        let mut guard = crate::lock!(self.0);
         guard.get_mut().unwrap().flush();
     }
 }

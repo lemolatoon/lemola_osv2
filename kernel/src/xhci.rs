@@ -1,13 +1,10 @@
-use core::{cell::OnceCell, ffi::c_void};
+use core::ffi::c_void;
 
-use spin::Mutex;
+use kernel_lib::futures::yield_pending;
 
 use crate::{
-    alloc::alloc::GlobalAllocator,
-    interrupts::InterruptVector,
-    memory::MemoryMapper,
-    pci, serial_println,
-    usb::class_driver::callbacks::{self, CallbackType},
+    alloc::alloc::GlobalAllocator, interrupts::InterruptVector, memory::MemoryMapper, pci,
+    serial_println, usb::class_driver::ClassDriverManager,
 };
 
 use self::controller::XhciController;
@@ -20,9 +17,7 @@ pub mod port;
 pub mod transfer_ring;
 pub mod trb;
 
-pub static XHC: Mutex<
-    OnceCell<XhciController<MemoryMapper, &'static GlobalAllocator, CallbackType, CallbackType>>,
-> = Mutex::new(OnceCell::new());
+pub type Controller = XhciController<MemoryMapper, &'static GlobalAllocator>;
 
 const LOCAL_APIC_ADDRESS: usize = 0xfee0_0000;
 pub fn read_local_apic_id(offset: usize) -> u8 {
@@ -30,10 +25,75 @@ pub fn read_local_apic_id(offset: usize) -> u8 {
 }
 
 pub fn write_local_apic_id(offset: usize, data: u32) {
-    unsafe { ((LOCAL_APIC_ADDRESS + offset )as *mut u32).write_volatile(data) };
+    unsafe { ((LOCAL_APIC_ADDRESS + offset) as *mut u32).write_volatile(data) };
 }
 
-pub fn init_xhci_controller() {
+pub async fn poll_forever<MF, KF>(
+    controller: &Controller,
+    class_driver_manager: &ClassDriverManager<MF, KF>,
+) where
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+{
+    loop {
+        {
+            if controller.pending_already_popped_queue() {
+                log::debug!("having pending already popped queue");
+                controller.process_once_received(class_driver_manager).await;
+            }
+            if controller.pending_event() {
+                log::debug!("having pending event");
+                controller.process_event(class_driver_manager).await;
+            }
+        }
+
+        for _ in 0..100 {
+            yield_pending().await;
+        }
+    }
+}
+
+pub async fn tick_mouse_forever<MF, KF>(
+    controller: &Controller,
+    class_driver_manager: &ClassDriverManager<MF, KF>,
+) where
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+{
+    let mut count = 0;
+    loop {
+        // for avoiding deadlock
+        // x86_64::instructions::interrupts::disable();
+        {
+            controller
+                .async_tick_mouse(count, class_driver_manager)
+                .await
+                .unwrap();
+        }
+        count += 1;
+        yield_pending().await;
+        // x86_64::instructions::interrupts::enable();
+    }
+}
+
+pub async fn tick_keyboard_forever<MF, KF>(
+    controller: &Controller,
+    class_driver_manager: &ClassDriverManager<MF, KF>,
+) where
+    MF: Fn(u8, &[u8]),
+    KF: Fn(u8, &[u8]),
+{
+    let count = 0;
+    loop {
+        controller
+            .async_tick_keyboard(count, class_driver_manager)
+            .await
+            .unwrap();
+        yield_pending().await;
+    }
+}
+
+pub fn init_xhci_controller() -> Controller {
     let devices = crate::pci::register::scan_all_bus();
     for device in &devices {
         serial_println!(
@@ -73,8 +133,7 @@ pub fn init_xhci_controller() {
     let xhc_mmio_base = xhc_bar & 0xffff_ffff_ffff_fff0; // 下位4bitはBARのフラグ
 
     // bootstrap processor's id
-    let bsp_local_apic_id: u8 =
-        (unsafe { (0xfee00020 as *mut u32).read_volatile() as u32 } >> 24) as u8;
+    let bsp_local_apic_id: u8 = (unsafe { (0xfee00020 as *mut u32).read_volatile() } >> 24) as u8;
     pci::configure_msi_fixed_destination(
         xhci_device,
         bsp_local_apic_id,
@@ -84,19 +143,13 @@ pub fn init_xhci_controller() {
         0,
     );
 
-    let class_drivers = crate::usb::class_driver::ClassDriverManager::new(
-        callbacks::mouse(),
-        callbacks::keyboard(),
-    );
-
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
     let memory_mapper = crate::memory::MemoryMapper::new();
-    let mut controller =
-        unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper, class_drivers) };
+    let controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
     log::info!("xhc initialized");
     controller.run();
 
-    for port_idx in 0..controller.number_of_ports() {
+    for port_idx in (0..controller.number_of_ports()).rev() {
         let registers = controller.registers();
         let port_register_sets = &registers.port_register_set;
         let is_connected = port_register_sets
@@ -104,12 +157,12 @@ pub fn init_xhci_controller() {
             .portsc
             .current_connect_status();
         drop(registers);
-        log::debug!("Port {}: is_connected = {}", port_idx, is_connected);
+        log::debug!("portsc[{}]: is_connected = {}", port_idx, is_connected);
         if is_connected {
             controller.configure_port_at(port_idx as usize);
         }
     }
     log::debug!("Configured ports");
 
-    XHC.lock().get_or_init(|| controller);
+    controller
 }

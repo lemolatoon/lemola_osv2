@@ -4,6 +4,7 @@ pub mod mouse;
 
 use core::mem::MaybeUninit;
 
+use kernel_lib::mutex::Mutex;
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, DeviceDescriptor, Direction, Driver, DriverError,
     EndpointDescriptor, RequestCode, RequestDirection, RequestKind, RequestRecipient, RequestType,
@@ -104,10 +105,41 @@ where
         host: &mut dyn usb_host::USBHost,
     ) -> Result<(), DriverError> {
         let mut millis = 0;
+        log::info!("tick_until_running_state");
         while self.devices.iter().any(|d| {
             d.as_ref()
                 .map_or(false, |dd| dd.state != DeviceState::Running)
         }) {
+            millis += 1;
+            if millis % 1_000_000 != 0 {
+                continue;
+            }
+            for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
+                if device.state == DeviceState::Running {
+                    continue;
+                }
+                if let Err(TransferError::Permanent(e)) =
+                    device.fsm(millis, host, &mut self.callback)
+                {
+                    return Err(DriverError::Permanent(device.addr, e));
+                };
+                millis += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn tick_until(
+        &mut self,
+        host: &mut dyn usb_host::USBHost,
+        state: DeviceState,
+    ) -> Result<(), DriverError> {
+        let mut millis = 0;
+        while self
+            .devices
+            .iter()
+            .any(|d| d.as_ref().map_or(false, |dd| dd.state != state))
+        {
             for device in self.devices.iter_mut().filter_map(|d| d.as_mut()) {
                 if device.state == DeviceState::Running {
                     continue;
@@ -124,11 +156,22 @@ where
     }
 
     pub fn call_callback_at(&mut self, address: u8, buffer: &[u8]) {
+        assert_eq!(
+            self.devices
+                .iter()
+                .find(|d| d.as_ref().map_or(false, |d| d.addr == address))
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .state,
+            DeviceState::Running
+        );
         (self.callback)(address, buffer)
     }
 
     pub fn endpoints_mut(&mut self, address: u8) -> &mut [Option<Endpoint>; MAX_ENDPOINTS] {
-        let device = self.devices
+        let device = self
+            .devices
             .iter_mut()
             .find(|d| d.as_ref().map_or(false, |dd| dd.addr == address))
             .unwrap()
@@ -197,7 +240,7 @@ where
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum DeviceState {
+pub enum DeviceState {
     Addressed,
     WaitForSettle(usize),
     GetConfig,
@@ -348,8 +391,7 @@ impl<
                 let EndpointInfo {
                     interface_num,
                     endpoint,
-                } = (self.endpoint_searcher)(config_buf).expect("no boot keyboard found");
-                log::info!("Boot keyboard found on {:?}", endpoint);
+                } = (self.endpoint_searcher)(config_buf).expect("no interface found");
 
                 log::debug!(
                     "dci: {}",
@@ -781,14 +823,15 @@ impl EndpointTrait for Endpoint {
 macro_rules! add_device {
     ($func_name:ident, $device:ident, $err:expr) => {
         pub fn $func_name(
-            &mut self,
+            &self,
             slot_id: usize,
             device_descriptor: DeviceDescriptor,
             addr: u8,
         ) -> Result<(), DriverError> {
-            if Driver::want_device(&self.$device.1, &device_descriptor) {
-                self.$device.0 = Some(slot_id);
-                return Driver::add_device(&mut self.$device.1, device_descriptor, addr);
+            let mut device = self.$device.lock(file!(), line!());
+            if Driver::want_device(&device.driver, &device_descriptor) {
+                device.slot_id = Some(slot_id);
+                return Driver::add_device(&mut device.driver, device_descriptor, addr);
             }
 
             Err(DriverError::Permanent(addr, $err))
@@ -815,13 +858,25 @@ macro_rules! tick {
 }
 
 #[derive(Debug)]
+pub struct DriverInfo<T: AsyncDriver> {
+    pub slot_id: Option<usize>,
+    pub driver: T,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum DriverKind {
+    Mouse,
+    Keyboard,
+}
+
+#[derive(Debug)]
 pub struct ClassDriverManager<MF, KF>
 where
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
-    mouse: (Option<usize>, MouseDriver<MF>),
-    keyboard: (Option<usize>, BootKeyboardDriver<KF>),
+    mouse: Mutex<DriverInfo<MouseDriver<MF>>>,
+    keyboard: Mutex<DriverInfo<BootKeyboardDriver<KF>>>,
 }
 
 impl<MF, KF> ClassDriverManager<MF, KF>
@@ -830,67 +885,66 @@ where
     KF: Fn(u8, &[u8]),
 {
     pub fn new(mouse_callback: MF, keyboard_callback: KF) -> Self {
-        Self {
-            mouse: (None, MouseDriver::new_mouse(mouse_callback)),
-            keyboard: (
-                None,
-                BootKeyboardDriver::new_boot_keyboard(keyboard_callback),
-            ),
-        }
+        let mouse = DriverInfo {
+            slot_id: None,
+            driver: MouseDriver::new_mouse(mouse_callback),
+        };
+        let mouse = Mutex::new(mouse);
+        let keyboard = DriverInfo {
+            slot_id: None,
+            driver: BootKeyboardDriver::new_boot_keyboard(keyboard_callback),
+        };
+        let keyboard = Mutex::new(keyboard);
+        Self { mouse, keyboard }
     }
 
-    pub fn tick<'a>(
-        &mut self,
-        millis: usize,
-        mut get_host: impl FnMut(usize) -> Option<&'a mut dyn usb_host::USBHost>, // slot_id to host
-    ) -> Result<(), DriverError> {
-        macro_rules! tick_device {
-            ($device:ident) => {
-                if let Some(slot_id) = self.$device.0 {
-                    if let Some(host) = get_host(slot_id) {
-                        Driver::tick(&mut self.$device.1, millis, host)?;
-                    }
+    // pub fn tick<'a>(
+    //     &mut self,
+    //     millis: usize,
+    //     mut get_host: impl FnMut(usize) -> Option<&'a mut dyn usb_host::USBHost>, // slot_id to host
+    // ) -> Result<(), DriverError> {
+    //     macro_rules! tick_device {
+    //         ($device:ident) => {
+    //             let device = self.$device.lock();
+    //             if let Some(slot_id) = device.address {
+    //                 if let Some(host) = get_host(slot_id) {
+    //                     Driver::tick(&mut self.$device.1, millis, host)?;
+    //                 }
+    //             }
+    //         };
+    //     }
+    //     tick_device!(mouse);
+    //     tick_device!(keyboard);
+    //     Ok(())
+    // }
+
+    pub fn driver_kind(&self, slot_id: usize) -> Option<DriverKind> {
+        {
+            let mouse = kernel_lib::lock!(self.mouse);
+            if let Some(slot) = mouse.slot_id {
+                if slot == slot_id {
+                    return Some(DriverKind::Mouse);
                 }
-            };
+            }
         }
-        tick_device!(mouse);
-        tick_device!(keyboard);
-        Ok(())
-    }
+        {
+            let keyboard = kernel_lib::lock!(self.keyboard);
+            if let Some(slot) = keyboard.slot_id {
+                if slot == slot_id {
+                    return Some(DriverKind::Keyboard);
+                }
+            }
+        }
 
-    pub fn driver_at(&mut self, slot_id: usize) -> Option<&mut dyn Driver> {
-        if let Some(slot) = self.mouse.0 {
-            if slot == slot_id {
-                return Some(&mut self.mouse.1);
-            }
-        }
-        if let Some(slot) = self.keyboard.0 {
-            if slot == slot_id {
-                return Some(&mut self.keyboard.1);
-            }
-        }
         None
     }
 
-    pub fn tick_at(
-        &mut self,
-        slot_id: usize,
-        millis: usize,
-        host: &mut dyn usb_host::USBHost,
-    ) -> Result<(), DriverError> {
-        if let Some(driver) = self.driver_at(slot_id) {
-            driver.tick(millis, host)?;
-        }
-
-        Ok(())
+    pub fn mouse(&self) -> &Mutex<DriverInfo<MouseDriver<MF>>> {
+        &self.mouse
     }
 
-    pub fn mouse(&mut self) -> &mut (Option<usize>, MouseDriver<MF>) {
-        &mut self.mouse
-    }
-
-    pub fn keyboard(&mut self) -> &mut (Option<usize>, BootKeyboardDriver<KF>) {
-        &mut self.keyboard
+    pub fn keyboard(&self) -> &Mutex<DriverInfo<BootKeyboardDriver<KF>>> {
+        &self.keyboard
     }
 
     add_device!(add_mouse_device, mouse, "Mouse device not wanted");

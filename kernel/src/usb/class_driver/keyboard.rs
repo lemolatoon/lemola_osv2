@@ -17,7 +17,7 @@ const MAX_ENDPOINTS: usize = 2;
 // The maximum size configuration descriptor we can handle.
 const CONFIG_BUFFER_LEN: usize = 256;
 
-const N_IN_TRANSFER_BYTES: usize = 8;
+pub const N_IN_TRANSFER_BYTES: usize = 8;
 
 /// Boot protocol keyboard driver for USB hosts.
 pub type BootKeyboardDriver<F> = InputOnlyDriver<
@@ -57,9 +57,13 @@ fn ep_for_bootkbd(buf: &[u8]) -> Option<EndpointInfo<'_>> {
                 interface_found = None;
             }
         } else if let DescriptorRef::Endpoint(edesc) = desc {
-            match (edesc.b_endpoint_address >> 7, edesc.bm_attributes & 3) {
-                // Interrupt IN endpoint
-                (1, 3) => {}
+            match (
+                edesc.b_endpoint_address >> 7,
+                edesc.bm_attributes & 3,
+                edesc.w_max_packet_size,
+            ) {
+                // Interrupt IN endpoint && boot keyboardぽい
+                (1, 3, 8) => {}
                 _ => continue,
             }
             if let Some(interface_num) = interface_found {

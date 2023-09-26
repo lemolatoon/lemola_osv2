@@ -6,6 +6,7 @@
 pub mod alloc;
 pub mod futures;
 pub mod logger;
+pub mod mutex;
 pub mod render;
 pub mod shapes;
 pub mod write_to;
@@ -39,6 +40,10 @@ impl Color {
             g: 255,
             b: 255,
         }
+    }
+
+    pub const fn green() -> Self {
+        Self { r: 0, g: 255, b: 0 }
     }
 }
 pub trait PixcelInfo {
