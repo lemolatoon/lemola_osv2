@@ -7,7 +7,7 @@ use usb_host::{
 };
 
 use crate::usb::{
-    descriptor::{DescriptorIter, DescriptorRef},
+    descriptor::{DescriptorIter, DescriptorRef, HubDescriptor},
     traits::{AsyncDriver, AsyncUSBHost},
 };
 
@@ -112,6 +112,7 @@ enum HubState {
     GetConfig,
     SetConfig,
     GetHubDescriptor,
+    GetStatus,
     Running,
 }
 
@@ -261,6 +262,41 @@ impl HubDevice {
                 self.state = HubState::GetHubDescriptor;
             }
             HubState::GetHubDescriptor => {
+                // USB2.0 spec
+                // 11.24.1 Standard Requests
+                // 11.24.2.5 Get Hub Descriptor
+
+                // 10100000B
+                let type_ = RequestType::from((
+                    RequestDirection::DeviceToHost,
+                    RequestKind::Class,
+                    RequestRecipient::Device,
+                )); // 0xA0
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(type_) }, 0xA0);
+
+                // Descriptor Type and Descriptor Index
+                // 11.22.2.1 Hub Descriptor
+                // Descriptor Type: 29H for hub descriptor
+                // All hubs are required to implement one hub descriptor, with descriptor index zero.
+                let w_value = WValue::from((0, 0x29)); // 0x2900
+                assert_eq!(unsafe { core::mem::transmute::<_, u16>(w_value) }, 0x2900);
+
+                let mut hub_descriptor = HubDescriptor::default();
+                let buf = unsafe { to_slice_mut(&mut hub_descriptor) };
+                host.control_transfer(
+                    &mut self.ep0,
+                    type_,
+                    RequestCode::GetDescriptor,
+                    w_value,
+                    0,
+                    Some(buf),
+                )
+                .await?;
+
+                log::debug!("hub descriptor: {:?}", hub_descriptor);
+                self.state = HubState::GetStatus;
+            }
+            HubState::GetStatus => {
                 todo!()
             }
             HubState::Running => todo!(),
