@@ -261,111 +261,113 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         }
         let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
-        if device_descriptor.b_device_class == 0 {
-            let mut boot_keyboard_interface = None;
-            let mut mouse_interface = None;
-            let mut endpoint_descriptor = None;
-            for desc in descriptors {
-                if let Descriptor::Interface(interface) = desc {
-                    match (
-                        interface.b_interface_class,
-                        interface.b_interface_sub_class,
-                        interface.b_interface_protocol,
-                    ) {
-                        (3, 1, 1) => {
-                            log::debug!("HID boot keyboard interface found");
-                            boot_keyboard_interface = Some(interface);
-                        }
-                        (3, 1, 2) => {
-                            log::debug!("HID mouse interface found");
-                            mouse_interface = Some(interface);
-                        }
-                        unknown => {
-                            log::debug!("unknown interface found: {:?}", unknown);
-                        }
-                    };
-                } else if let Descriptor::Endpoint(endpoint) = desc {
-                    log::debug!("endpoint: {:?}", endpoint);
-                    if (boot_keyboard_interface.is_some() || mouse_interface.is_some())
-                        && endpoint_descriptor.is_none()
-                    {
-                        endpoint_descriptor = Some(endpoint);
+        let mut boot_keyboard_interface = None;
+        let mut mouse_interface = None;
+        let mut endpoint_descriptor = None;
+        for desc in descriptors {
+            if let Descriptor::Interface(interface) = desc {
+                match (
+                    interface.b_interface_class,
+                    interface.b_interface_sub_class,
+                    interface.b_interface_protocol,
+                ) {
+                    (3, 1, 1) => {
+                        log::debug!("HID boot keyboard interface found");
+                        boot_keyboard_interface = Some(interface);
                     }
-                }
-            }
-            if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
-                let address = self.device_address();
-                log::info!("add keyboard device");
-                class_drivers
-                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                    .unwrap();
-                {
-                    let mut driver_info = kernel_lib::lock!(class_drivers.keyboard());
-                    driver_info.driver.tick_until_running_state(self).unwrap();
-                    let ep = driver_info.driver.endpoints_mut(address)[0]
-                        .as_mut()
-                        .unwrap();
-                    await_sync!(self.init_transfer_ring_for_interrupt_at(
-                        ep,
-                        endpoint_descriptor.as_ref().unwrap()
-                    ))
-                    .unwrap();
+                    (3, 1, 2) => {
+                        log::debug!("HID mouse interface found");
+                        mouse_interface = Some(interface);
+                    }
+                    (9, 0, protocol) => match protocol {
+                        0 => log::debug!("Full-Speed hub found"),
+                        1 => log::debug!("Hi-speed hub with single TT found"),
+                        2 => log::debug!("Hi-speed hub with multiple TTs found"),
+                        _ => log::debug!("unknown hub found"),
+                    },
+                    unknown => {
+                        log::debug!("unknown interface found: {:?}", unknown);
+                    }
                 };
-                let transfer_ring = self
-                    .transfer_ring_at_mut(dci)
-                    .as_mut()
-                    .expect("transfer ring not allocated")
-                    .as_mut();
-                transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
+            } else if let Descriptor::Endpoint(endpoint) = desc {
+                log::debug!("endpoint: {:?}", endpoint);
+                if (boot_keyboard_interface.is_some() || mouse_interface.is_some())
+                    && endpoint_descriptor.is_none()
                 {
-                    // door-bell
-                    let mut registers = kernel_lib::lock!(self.registers);
-                    registers
-                        .doorbell
-                        .update_volatile_at(self.slot_id(), |doorbell| {
-                            doorbell.set_doorbell_target(dci.address());
-                            doorbell.set_doorbell_stream_id(0);
-                        });
+                    endpoint_descriptor = Some(endpoint);
                 }
             }
-            if let Some(_mouse_interface) = mouse_interface {
-                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
-                let address = self.device_address();
-                class_drivers
-                    .add_mouse_device(self.slot_id(), device_descriptor, address)
-                    .unwrap();
-                {
-                    let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
-                    driver_info.driver.tick_until_running_state(self).unwrap();
-                    let ep = driver_info.driver.endpoints_mut(address)[0]
-                        .as_mut()
-                        .unwrap();
-                    await_sync!(self.init_transfer_ring_for_interrupt_at(
-                        ep,
-                        endpoint_descriptor.as_ref().unwrap()
-                    ))
-                    .unwrap();
-                };
-                let transfer_ring = self
-                    .transfer_ring_at_mut(dci)
+        }
+        if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
+            let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
+            let address = self.device_address();
+            log::info!("add keyboard device");
+            class_drivers
+                .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                .unwrap();
+            {
+                let mut driver_info = kernel_lib::lock!(class_drivers.keyboard());
+                driver_info.driver.tick_until_running_state(self).unwrap();
+                let ep = driver_info.driver.endpoints_mut(address)[0]
                     .as_mut()
-                    .expect("transfer ring not allocated")
-                    .as_mut();
-                transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
-                {
-                    // door-bell
-                    let mut registers = kernel_lib::lock!(self.registers);
-                    registers
-                        .doorbell
-                        .update_volatile_at(self.slot_id(), |doorbell| {
-                            doorbell.set_doorbell_target(dci.address());
-                            doorbell.set_doorbell_stream_id(0);
-                        });
-                }
+                    .unwrap();
+                await_sync!(self.init_transfer_ring_for_interrupt_at(
+                    ep,
+                    endpoint_descriptor.as_ref().unwrap()
+                ))
+                .unwrap();
+            };
+            let transfer_ring = self
+                .transfer_ring_at_mut(dci)
+                .as_mut()
+                .expect("transfer ring not allocated")
+                .as_mut();
+            transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
+            {
+                // door-bell
+                let mut registers = kernel_lib::lock!(self.registers);
+                registers
+                    .doorbell
+                    .update_volatile_at(self.slot_id(), |doorbell| {
+                        doorbell.set_doorbell_target(dci.address());
+                        doorbell.set_doorbell_stream_id(0);
+                    });
             }
-        } else {
-            log::warn!("unknown device class: {}", device_descriptor.b_device_class);
+        }
+        if let Some(_mouse_interface) = mouse_interface {
+            let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
+            let address = self.device_address();
+            class_drivers
+                .add_mouse_device(self.slot_id(), device_descriptor, address)
+                .unwrap();
+            {
+                let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
+                driver_info.driver.tick_until_running_state(self).unwrap();
+                let ep = driver_info.driver.endpoints_mut(address)[0]
+                    .as_mut()
+                    .unwrap();
+                await_sync!(self.init_transfer_ring_for_interrupt_at(
+                    ep,
+                    endpoint_descriptor.as_ref().unwrap()
+                ))
+                .unwrap();
+            };
+            let transfer_ring = self
+                .transfer_ring_at_mut(dci)
+                .as_mut()
+                .expect("transfer ring not allocated")
+                .as_mut();
+            transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
+            {
+                // door-bell
+                let mut registers = kernel_lib::lock!(self.registers);
+                registers
+                    .doorbell
+                    .update_volatile_at(self.slot_id(), |doorbell| {
+                        doorbell.set_doorbell_target(dci.address());
+                        doorbell.set_doorbell_stream_id(0);
+                    });
+            }
         }
     }
 
@@ -377,11 +379,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         buf: Option<NonNull<[u8]>>,
     ) -> TransferEventWaitKind {
         let dci: DeviceContextIndex = endpoint_id.address();
-        log::debug!(
-            "control_in: setup_data: {:?}, ep addr: {:?}",
-            &setup_data,
-            &dci
-        );
 
         let transfer_ring = self
             .transfer_ring_at_mut(dci)
@@ -438,11 +435,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         };
 
         let mut registers = kernel_lib::lock!(self.registers);
-        log::debug!(
-            "slot_id: {:?}, dci.address(): {}",
-            self.slot_id,
-            dci.address()
-        );
 
         registers
             .doorbell
@@ -463,7 +455,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
         let w_length = buf.as_ref().map_or(0, |buf| buf.len() as u16);
-        log::debug!("w_length: {}", w_length);
         let setup_packet = SetupPacket {
             bm_request_type,
             b_request,
@@ -793,7 +784,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             )
             .await
             .unwrap();
-        log::debug!("Transferred {} bytes", length);
         length
     }
 }

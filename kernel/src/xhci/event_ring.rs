@@ -166,7 +166,6 @@ impl EventRing<&'static GlobalAllocator> {
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Result<event::Allowed, TrbRaw> {
-        log::debug!("pop: n_pop: {} / {}", self.n_pop, self.trb_buffer.len());
         self.n_pop += 1;
         let dequeue_pointer = interrupter
             .erdp
@@ -188,7 +187,6 @@ impl EventRing<&'static GlobalAllocator> {
             self.cycle_bit = !self.cycle_bit;
         }
 
-        log::debug!("next dequeue ptr: {:p}", next);
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
             erdp.clear_event_handler_busy();
@@ -342,7 +340,6 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                 for ptr in ptrs {
                     match &popped_trb {
                         Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
-                            log::debug!("got event: {:?}", event);
                             return Poll::Ready(*event);
                         }
                         Ok(_trb) => {
