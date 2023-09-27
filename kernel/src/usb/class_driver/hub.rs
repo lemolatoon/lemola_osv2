@@ -404,6 +404,105 @@ impl HubDevice {
 
                 yield_pending().await;
 
+                // 11.24.2.7.1.5
+                // SET_FEATURE / PORT_RESET
+                // A SetPortFeature(PORT_RESET) request will initiate the Resetting state if the conditions in Section 11.5.1.5 are met.
+
+                // 00100011B
+                let request_type = RequestType::from((
+                    RequestDirection::HostToDevice,
+                    RequestKind::Class,
+                    RequestRecipient::Other,
+                )); // 0x23
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(request_type) }, 0x23);
+
+                // Feature Selector
+                let mut w_value = WValue::default();
+                w_value.set_w_value_lo(PortFeatureSelector::PortReset as u8);
+                let w_index = port_index as u16 + 1;
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    request_type,
+                    RequestCode::SetFeature,
+                    w_value,
+                    w_index,
+                    None,
+                )
+                .await?;
+
+                log::debug!("port[{}] port reset", port_index);
+
+                sleep(50);
+
+                yield_pending().await;
+
+                // 11.24.2.2 Clear Port Feature
+                // CLEAR_FEATURE / C_PORT_RESET
+
+                // 00100011B
+                let request_type = RequestType::from((
+                    RequestDirection::HostToDevice,
+                    RequestKind::Class,
+                    RequestRecipient::Other,
+                )); // 0x23
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(request_type) }, 0x23);
+
+                // Feature Selector
+                let mut w_value = WValue::default();
+                // 11.24.2.7.2.5 C_PORT_RESET
+                // TODO:w_valueは selector | port じゃないのか？
+                w_value.set_w_value_lo(PortFeatureSelector::CPortReset as u8);
+                let w_index = port_index as u16 + 1;
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    request_type,
+                    RequestCode::ClearFeature,
+                    w_value,
+                    w_index,
+                    None,
+                )
+                .await?;
+
+                yield_pending().await;
+                log::debug!("port[{}] CPortReset cleared", port_index);
+
+                log::debug!("Hub found device at port[{}]!!", port_index);
+
+                // assign address
+                // 11.24.2.7 Get Port Status
+                // 10100011B
+                let request_type = RequestType::from((
+                    RequestDirection::DeviceToHost,
+                    RequestKind::Class,
+                    RequestRecipient::Other,
+                )); // 0xa3
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(request_type) }, 0xa3);
+
+                let w_value = WValue::default();
+                let w_index = port_index as u16 + 1;
+                // 11.24.2.7.1 Port Status Bits
+                let mut status = [0u16; 2];
+                let buf = unsafe { to_slice_mut(&mut status) };
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    request_type,
+                    RequestCode::GetStatus,
+                    w_value,
+                    w_index,
+                    Some(buf),
+                )
+                .await?;
+
+                const PORT_LOW_SPEED_BIT: u16 = 1 << 9;
+                let is_low_speed = (status[0]) & PORT_LOW_SPEED_BIT != 0;
+
+                host.assign_address(self.address, port_index, is_low_speed)
+                    .await
+                    .unwrap();
+
                 self.state = HubState::InitPort(port_index + 1);
             }
             HubState::InitPort(_) => {
