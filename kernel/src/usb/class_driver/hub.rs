@@ -523,11 +523,13 @@ unsafe fn to_slice_mut<T>(v: &mut T) -> &mut [u8] {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum HubFeatureSelector {
     CHubLocalPower = 0,
     CHubOverCurrent = 1,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum PortFeatureSelector {
     PortConnection = 0,
     PortEnable = 1,

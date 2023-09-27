@@ -14,6 +14,7 @@ use crate::usb::device::{DeviceContextInfo, DeviceContextWrapper};
 
 use super::command_ring::CommandRing;
 use super::event_ring::EventRing;
+use super::user_event_ring::UserEventRing;
 
 type Device32BytePtr = u64;
 
@@ -24,6 +25,7 @@ pub struct DeviceManager<M: Mapper + Clone + Send + Sync, A: Allocator> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     command_ring: Arc<Mutex<CommandRing>>,
+    user_event_ring: Arc<Mutex<UserEventRing>>,
 }
 
 impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAllocator> {
@@ -32,12 +34,14 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         registers: Arc<Mutex<xhci::Registers<M>>>,
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         command_ring: Arc<Mutex<CommandRing>>,
+        user_event_ring: Arc<Mutex<UserEventRing>>,
     ) -> Self {
         Self {
             registers,
             device_context_array: DeviceContextArray::new(max_slots),
             event_ring,
             command_ring,
+            user_event_ring,
         }
     }
 
@@ -59,6 +63,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         &self,
         port_index: usize,
         slot_id: usize,
+        routing: u32,
     ) -> Arc<Mutex<Option<DeviceContextInfo<M, &'static GlobalAllocator>>>> {
         if slot_id > self.device_context_array.max_slots() {
             log::error!(
@@ -72,6 +77,7 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
         let registers = Arc::clone(&self.registers);
         let event_ring = Arc::clone(&self.event_ring);
         let command_ring = Arc::clone(&self.command_ring);
+        let user_event_ring = Arc::clone(&self.user_event_ring);
         {
             let mut device_context_info =
                 kernel_lib::lock!(self.device_context_array.device_context_infos[slot_id]);
@@ -81,10 +87,12 @@ impl<M: Mapper + Clone + Send + Sync + Send> DeviceManager<M, &'static GlobalAll
             }
             *device_context_info = Some(DeviceContextInfo::new(
                 port_index,
+                routing,
                 slot_id,
                 registers,
                 event_ring,
                 command_ring,
+                user_event_ring,
             ));
         }
         Arc::clone(&self.device_context_array.device_context_infos[slot_id])

@@ -33,8 +33,10 @@ use crate::{
         event_ring::{
             CommandCompletionFuture, EventRing, TransferEventFuture, TransferEventWaitKind,
         },
+        next_route,
         transfer_ring::TransferRing,
         trb::TrbRaw,
+        user_event_ring::{InitPortDevice, UserEvent, UserEventRing},
     },
 };
 
@@ -79,8 +81,10 @@ pub struct DeviceContextInfo<M: Mapper + Clone + Send + Sync, A: Allocator> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     command_ring: Arc<Mutex<CommandRing>>,
+    user_event_ring: Arc<Mutex<UserEventRing>>,
     slot_id: usize,
     port_index: usize,
+    routing: u32,
     descriptors: Option<Vec<Descriptor>>,
     pub input_context: Box<InputContextWrapper, A>,
     pub device_context: Box<DeviceContextWrapper, A>,
@@ -91,10 +95,12 @@ pub struct DeviceContextInfo<M: Mapper + Clone + Send + Sync, A: Allocator> {
 impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn new(
         port_index: usize,
+        routing: u32,
         slot_id: usize,
         registers: Arc<Mutex<xhci::Registers<M>>>,
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         command_ring: Arc<Mutex<CommandRing>>,
+        user_event_ring: Arc<Mutex<UserEventRing>>,
     ) -> Self {
         const TRANSFER_RING_BUF_SIZE: usize = 32;
         #[allow(clippy::type_complexity)]
@@ -120,9 +126,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             registers,
             event_ring,
             command_ring,
+            user_event_ring,
             slot_id,
             port_index,
             descriptors: None,
+            routing,
             // 4.3.3 Device Slot Initialization
             // 1. Allocate an Input Context ...
             input_context: InputContextWrapper::new(), // 0 filled
@@ -155,14 +163,14 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         control.set_add_context_flag(dci.address() as usize);
     }
 
-    pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
+    pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8, routing: u32) {
         // 4.3.3 Device Slot Initialization
         // 3. Initialize the Input Slot Context data structure (6.2.2)
         use xhci::context::InputHandler;
         log::debug!("initialize_slot_context: port_id: {}", port_id);
         let slot_context = self.input_context.0.device_mut().slot_mut();
         // Route String = Topology defined. (To access a device attached directly to a Root Hub port, the Route String shall equal '0'.)
-        slot_context.set_route_string(0);
+        slot_context.set_route_string(routing & 0x3_ffff);
         // and the Root Hub Port Number shall indicate the specific Root Hub port to use.
         slot_context.set_root_hub_port_number(port_id);
         // Context Entries = 1
@@ -571,11 +579,23 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
 
     async fn async_assign_address(
         &mut self,
-        hub_address: u8,
+        _hub_address: u8,
         port_index: u8,
         device_is_low_speed: bool,
-    ) -> Result<u8, usb_host::TransferError> {
-        todo!()
+    ) -> Result<(), usb_host::TransferError> {
+        let hub_port_index = self.port_index as u8;
+        let routing = next_route(self.routing, port_index + 1);
+        let speed = if device_is_low_speed { 1 } else { 0 };
+        let init_port_device = InitPortDevice {
+            port_index: hub_port_index,
+            routing,
+            speed,
+        };
+        {
+            let mut user_event_ring = kernel_lib::lock!(&self.user_event_ring);
+            user_event_ring.push(UserEvent::InitPortDevice(init_port_device))
+        }
+        Ok(())
     }
 
     async fn init_transfer_ring_for_interrupt_at(
@@ -1097,7 +1117,7 @@ impl<M: Mapper + Clone + Send + Sync + Sync + Send> AsyncUSBHost
         hub_address: u8,
         port_index: u8,
         device_is_low_speed: bool,
-    ) -> Result<u8, usb_host::TransferError> {
+    ) -> Result<(), usb_host::TransferError> {
         self.async_assign_address(hub_address, port_index, device_is_low_speed)
             .await
     }

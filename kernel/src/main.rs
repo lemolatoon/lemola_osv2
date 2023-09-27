@@ -46,11 +46,12 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
 
     init_idt();
-    let controller = init_xhci_controller();
     let class_drivers = kernel::usb::class_driver::ClassDriverManager::new(
         callbacks::mouse(),
         callbacks::keyboard(),
     );
+    let class_drivers: &'static _ = unsafe { &*(&class_drivers as *const _) };
+    let controller = init_xhci_controller(class_drivers);
 
     static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: usb_host::USBHost);
 
@@ -62,11 +63,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     let mut executor = Executor::new();
     let controller: &'static _ = unsafe { &*(&controller as *const _) };
-    let class_drivers: &'static _ = unsafe { &*(&class_drivers as *const _) };
-    let polling_task = Task::new(
-        Priority::Default,
-        kernel::xhci::poll_forever(controller, class_drivers),
-    );
+    let polling_task = Task::new(Priority::Default, kernel::xhci::poll_forever(controller));
     let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
