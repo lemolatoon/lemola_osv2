@@ -45,12 +45,12 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
 
+    init_idt();
     let controller = init_xhci_controller();
     let class_drivers = kernel::usb::class_driver::ClassDriverManager::new(
         callbacks::mouse(),
         callbacks::keyboard(),
     );
-    init_idt();
 
     static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: usb_host::USBHost);
 

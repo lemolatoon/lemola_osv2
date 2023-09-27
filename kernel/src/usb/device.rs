@@ -263,6 +263,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         log::debug!("descriptors requested with config: {:?}", descriptors);
         let mut boot_keyboard_interface = None;
         let mut mouse_interface = None;
+        let mut hub_interface = None;
         let mut endpoint_descriptor = None;
         for desc in descriptors {
             if let Descriptor::Interface(interface) = desc {
@@ -279,12 +280,15 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                         log::debug!("HID mouse interface found");
                         mouse_interface = Some(interface);
                     }
-                    (9, 0, protocol) => match protocol {
-                        0 => log::debug!("Full-Speed hub found"),
-                        1 => log::debug!("Hi-speed hub with single TT found"),
-                        2 => log::debug!("Hi-speed hub with multiple TTs found"),
-                        _ => log::debug!("unknown hub found"),
-                    },
+                    (9, 0, protocol) => {
+                        match protocol {
+                            0 => log::debug!("Full-Speed hub found"),
+                            1 => log::debug!("Hi-speed hub with single TT found"),
+                            2 => log::debug!("Hi-speed hub with multiple TTs found"),
+                            _ => log::debug!("unknown hub found"),
+                        };
+                        hub_interface = Some(interface);
+                    }
                     unknown => {
                         log::debug!("unknown interface found: {:?}", unknown);
                     }
@@ -368,6 +372,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
                         doorbell.set_doorbell_stream_id(0);
                     });
             }
+        }
+        if let Some(_hub_interface) = hub_interface {
+            let address = self.device_address();
+            class_drivers
+                .add_hub_device(self.slot_id(), device_descriptor, address)
+                .unwrap();
+            {
+                let mut driver_info = kernel_lib::lock!(class_drivers.hub());
+                driver_info.driver.tick_until_running_state(self).unwrap();
+            };
         }
     }
 
@@ -773,17 +787,27 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         let b_request = usb_host::RequestCode::GetDescriptor;
         let w_value = (descriptor_index, descriptor_type as u8).into();
         let w_index = 0;
-        let length = self
-            .async_control_transfer(
-                &mut endpoint_id,
-                bm_request_type,
-                b_request,
-                w_value,
-                w_index,
-                Some(buf),
-            )
-            .await
-            .unwrap();
+
+        let mut count = 0;
+        let length = loop {
+            let length = self
+                .async_control_transfer(
+                    &mut endpoint_id,
+                    bm_request_type,
+                    b_request,
+                    w_value,
+                    w_index,
+                    Some(buf),
+                )
+                .await;
+            if let Ok(length) = length {
+                break length;
+            }
+            count += 1;
+            if count > 100 {
+                panic!("too many retries: {:?}", length);
+            }
+        };
         length
     }
 }

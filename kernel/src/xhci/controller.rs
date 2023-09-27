@@ -161,6 +161,12 @@ where
     pub fn run(&self) {
         let mut registers = kernel_lib::lock!(self.registers);
         let operational = &mut registers.operational;
+        for _ in 0..1000 {
+            let mut count = 0;
+            unsafe {
+                (&mut count as *mut i32).write_volatile(0);
+            }
+        }
         operational.usbcmd.update_volatile(|usbcmd| {
             usbcmd.set_run_stop();
         });
@@ -342,103 +348,111 @@ where
             log::info!("might be USB2.0 device");
         }
 
-        let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
-        match port_configure_state.addressing_port_index {
-            Some(_) => {
+        let can_process = {
+            let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+            if port_configure_state.addressing_port_index == Some(port_idx) {
+                true
+            } else if port_configure_state.addressing_port_index.is_none() {
+                port_configure_state.addressing_port_index = Some(port_idx);
+                true
+            } else {
                 // This branch is fallen, when another port is currently trying to be configured
-                port_configure_state.port_config_phase[port_idx] =
-                    PortConfigPhase::WaitingAddressed;
+                port_configure_state.set_port_phase_at(port_idx, PortConfigPhase::WaitingAddressed);
+                false
             }
-            None => {
-                let port_phase = port_configure_state.port_phase_at(port_idx);
-                if !matches!(
-                    port_phase,
-                    PortConfigPhase::NotConnected | PortConfigPhase::WaitingAddressed
-                ) {
-                    panic!("INVALID PortConfigPhase state.");
-                }
-
-                port_configure_state.start_configuration_at(port_idx);
-                log::debug!(
-                    "start clear connect status change and port reset port at: portsc[{}]",
-                    port_idx
-                );
-                let mut registers = kernel_lib::lock!(self.registers);
-                let port_register_sets = &mut registers.port_register_set;
-                port_register_sets.update_volatile_at(port_idx, |port| {
-                    // prevent clearing rw1c bits
-                    port.portsc.set_0_port_enabled_disabled();
-                    port.portsc.set_0_connect_status_change();
-                    port.portsc.set_0_port_enabled_disabled_change();
-                    port.portsc.set_0_warm_port_reset_change();
-                    port.portsc.set_0_over_current_change();
-                    port.portsc.set_0_port_reset_change();
-                    port.portsc.set_0_port_link_state_change();
-                    port.portsc.set_0_port_config_error_change();
-                    // actual reset operation of port
-                    port.portsc.set_port_power();
-                });
-                while !port_register_sets
-                    .read_volatile_at(port_idx)
-                    .portsc
-                    .port_power()
-                {}
-                port_register_sets.update_volatile_at(port_idx, |port| {
-                    // prevent clearing rw1c bits
-                    port.portsc.set_0_port_enabled_disabled();
-                    port.portsc.set_0_connect_status_change();
-                    port.portsc.set_0_port_enabled_disabled_change();
-                    port.portsc.set_0_warm_port_reset_change();
-                    port.portsc.set_0_over_current_change();
-                    port.portsc.set_0_port_reset_change();
-                    port.portsc.set_0_port_link_state_change();
-                    port.portsc.set_0_port_config_error_change();
-                    // actual reset operation of port
-                    port.portsc.set_port_reset();
-                });
-                while port_register_sets
-                    .read_volatile_at(port_idx)
-                    .portsc
-                    .port_reset()
-                {}
-                port_register_sets.update_volatile_at(port_idx, |port| {
-                    // prevent clearing rw1c bits
-                    port.portsc.set_0_port_enabled_disabled();
-                    port.portsc.set_0_connect_status_change();
-                    port.portsc.set_0_port_enabled_disabled_change();
-                    port.portsc.set_0_warm_port_reset_change();
-                    port.portsc.set_0_over_current_change();
-                    port.portsc.set_0_port_reset_change();
-                    port.portsc.set_0_port_link_state_change();
-                    port.portsc.set_0_port_config_error_change();
-                    // actual reset operation of port
-                    port.portsc.clear_connect_status_change();
-                });
-                while port_register_sets
-                    .read_volatile_at(port_idx)
-                    .portsc
-                    .connect_status_change()
-                {}
-                log::debug!("[XHCI] port at {} is now reset!", port_idx);
-                log::debug!(
-                    "ports[{}].portsc: {:#x?}",
-                    port_idx,
-                    port_register_sets.read_volatile_at(port_idx).portsc
-                );
-                let is_enabled = {
-                    let portsc = port_register_sets.read_volatile_at(port_idx).portsc;
-                    // 4.19.1 Root Hub Port State Machines
-                    let flags = (
-                        portsc.port_power(),
-                        portsc.current_connect_status(),
-                        portsc.port_enabled_disabled(),
-                        portsc.port_reset(),
-                    );
-                    flags == (true, true, true, false)
-                };
-                assert!(is_enabled, "port is not enabled");
+        };
+        if !can_process {
+            return;
+        }
+        {
+            let port_configure_state = kernel_lib::lock!(self.port_configure_state);
+            let port_phase = port_configure_state.port_phase_at(port_idx);
+            if !matches!(
+                port_phase,
+                PortConfigPhase::NotConnected | PortConfigPhase::WaitingAddressed
+            ) {
+                panic!("INVALID PortConfigPhase state.");
             }
         }
+
+        log::debug!(
+            "start clear connect status change and port reset port at: portsc[{}]",
+            port_idx
+        );
+        let mut registers = kernel_lib::lock!(self.registers);
+        let port_register_sets = &mut registers.port_register_set;
+        port_register_sets.update_volatile_at(port_idx, |port| {
+            // prevent clearing rw1c bits
+            port.portsc.set_0_port_enabled_disabled();
+            port.portsc.set_0_connect_status_change();
+            port.portsc.set_0_port_enabled_disabled_change();
+            port.portsc.set_0_warm_port_reset_change();
+            port.portsc.set_0_over_current_change();
+            port.portsc.set_0_port_reset_change();
+            port.portsc.set_0_port_link_state_change();
+            port.portsc.set_0_port_config_error_change();
+            // actual reset operation of port
+            port.portsc.set_port_power();
+        });
+        while !port_register_sets
+            .read_volatile_at(port_idx)
+            .portsc
+            .port_power()
+        {}
+        port_register_sets.update_volatile_at(port_idx, |port| {
+            // prevent clearing rw1c bits
+            port.portsc.set_0_port_enabled_disabled();
+            port.portsc.set_0_connect_status_change();
+            port.portsc.set_0_port_enabled_disabled_change();
+            port.portsc.set_0_warm_port_reset_change();
+            port.portsc.set_0_over_current_change();
+            port.portsc.set_0_port_reset_change();
+            port.portsc.set_0_port_link_state_change();
+            port.portsc.set_0_port_config_error_change();
+            // actual reset operation of port
+            port.portsc.set_port_reset();
+        });
+        while port_register_sets
+            .read_volatile_at(port_idx)
+            .portsc
+            .port_reset()
+        {}
+        port_register_sets.update_volatile_at(port_idx, |port| {
+            // prevent clearing rw1c bits
+            port.portsc.set_0_port_enabled_disabled();
+            port.portsc.set_0_connect_status_change();
+            port.portsc.set_0_port_enabled_disabled_change();
+            port.portsc.set_0_warm_port_reset_change();
+            port.portsc.set_0_over_current_change();
+            port.portsc.set_0_port_reset_change();
+            port.portsc.set_0_port_link_state_change();
+            port.portsc.set_0_port_config_error_change();
+            // actual reset operation of port
+            port.portsc.clear_connect_status_change();
+        });
+        while port_register_sets
+            .read_volatile_at(port_idx)
+            .portsc
+            .connect_status_change()
+        {}
+        log::debug!("[XHCI] port at {} is now reset!", port_idx);
+        log::debug!(
+            "ports[{}].portsc: {:#x?}",
+            port_idx,
+            port_register_sets.read_volatile_at(port_idx).portsc
+        );
+        let is_enabled = {
+            let portsc = port_register_sets.read_volatile_at(port_idx).portsc;
+            // 4.19.1 Root Hub Port State Machines
+            let flags = (
+                portsc.port_power(),
+                portsc.current_connect_status(),
+                portsc.port_enabled_disabled(),
+                portsc.port_reset(),
+            );
+            flags == (true, true, true, false)
+        };
+        assert!(is_enabled, "port is not enabled");
     }
 
     pub fn enable_slot_at(&self, port_idx: usize) {
@@ -473,8 +487,10 @@ where
                 port_reg_set.portsc.clear_port_reset_change();
             });
 
-            let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
-            port_configure_state.port_config_phase[port_idx] = PortConfigPhase::EnablingSlot;
+            {
+                let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+                port_configure_state.port_config_phase[port_idx] = PortConfigPhase::EnablingSlot;
+            }
 
             let enable_slot_cmd =
                 trb::command::Allowed::EnableSlot(trb::command::EnableSlot::new());
@@ -484,7 +500,13 @@ where
                 doorbell.set_doorbell_stream_id(0);
             });
         } else {
-            panic!("this port[{}] is not ready to be enabled slot", port_idx);
+            log::error!("this port[{}] is not ready to be enabled slot", port_idx);
+            {
+                let mut port_configure_state = kernel_lib::lock!(self.port_configure_state);
+                port_configure_state.port_config_phase[port_idx] = PortConfigPhase::NotConnected;
+            }
+            self.reset_port_at(port_idx);
+            self.enable_slot_at(port_idx);
         }
     }
 
@@ -1212,6 +1234,20 @@ where
                         core::slice::from_raw_parts(buffer, keyboard::N_IN_TRANSFER_BYTES)
                     };
                     keyboard.driver.call_callback_at(address, buffer);
+                }
+                Some(DriverKind::Hub) => {
+                    let address = {
+                        let device = self.usb_device_host_at(slot_id as usize);
+                        let device = kernel_lib::lock!(device);
+                        device.as_ref().unwrap().device_address()
+                    };
+                    let mut hub = kernel_lib::lock!(class_driver_manager.hub());
+                    log::error!(
+                        "normal trb for hub driver not yet implemented, address: {}, slot_id: {}",
+                        address,
+                        slot_id,
+                    );
+                    return;
                 }
                 None => todo!(),
             }
