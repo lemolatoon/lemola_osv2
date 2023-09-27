@@ -497,7 +497,16 @@ impl HubDevice {
                 .await?;
 
                 const PORT_LOW_SPEED_BIT: u16 = 1 << 9;
+                const PORT_HIGH_SPEED_BIT: u16 = 1 << 10;
                 let is_low_speed = (status[0]) & PORT_LOW_SPEED_BIT != 0;
+                let is_high_speed = (status[0]) & PORT_HIGH_SPEED_BIT != 0;
+
+                log::debug!(
+                    "port[{}] is_low_speed: {}, is_high_speed: {}",
+                    port_index,
+                    is_low_speed,
+                    is_high_speed
+                );
 
                 host.assign_address(self.address, port_index, is_low_speed)
                     .await

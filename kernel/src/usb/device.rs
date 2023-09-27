@@ -163,7 +163,14 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         control.set_add_context_flag(dci.address() as usize);
     }
 
-    pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8, routing: u32) {
+    pub fn initialize_slot_context(
+        &mut self,
+        port_id: u8,
+        port_speed: u8,
+        routing: u32,
+        parent_hub_slot_id: Option<u8>,
+        parent_port_index: Option<u8>,
+    ) {
         // 4.3.3 Device Slot Initialization
         // 3. Initialize the Input Slot Context data structure (6.2.2)
         use xhci::context::InputHandler;
@@ -173,6 +180,12 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         slot_context.set_route_string(routing & 0x3_ffff);
         // and the Root Hub Port Number shall indicate the specific Root Hub port to use.
         slot_context.set_root_hub_port_number(port_id);
+        if let Some(parent_hub_slot_id) = parent_hub_slot_id {
+            slot_context.set_parent_hub_slot_id(parent_hub_slot_id);
+        }
+        if let Some(parent_port_index) = parent_port_index {
+            slot_context.set_parent_port_number(parent_port_index);
+        }
         // Context Entries = 1
         slot_context.set_context_entries(1);
         slot_context.set_speed(port_speed);
@@ -586,10 +599,14 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         let hub_port_index = self.port_index as u8;
         let routing = next_route(self.routing, port_index + 1);
         let speed = if device_is_low_speed { 1 } else { 0 };
+        let parent_hub_slot_id = self.slot_id() as u8;
+        let parent_port_index = self.port_index as u8;
         let init_port_device = InitPortDevice {
             port_index: hub_port_index,
             routing,
             speed,
+            parent_hub_slot_id: None,
+            parent_port_index: None,
         };
         {
             let mut user_event_ring = kernel_lib::lock!(&self.user_event_ring);

@@ -521,7 +521,15 @@ where
         }
     }
 
-    fn address_device_at(&self, port_index: usize, slot_id: usize, routing: u32) -> u64 {
+    fn address_device_at(
+        &self,
+        port_index: usize,
+        slot_id: usize,
+        routing: u32,
+        speed: u8,
+        parent_hub_slot_id: Option<u8>,
+        parent_port_index: Option<u8>,
+    ) -> u64 {
         // 4.3.3 Device Slot Initialization
         log::debug!(
             "address device at: port_index: {}, slot_id: {}",
@@ -563,8 +571,19 @@ where
         {
             let mut device = kernel_lib::lock!(device);
             let device = device.as_mut().unwrap();
+            let speed = if speed == 5 {
+                porttsc.port_speed()
+            } else {
+                speed
+            };
             // 3. Initialize the Input Slot Context data structure (6.2.2)
-            device.initialize_slot_context(port_index as u8 + 1, porttsc.port_speed(), routing);
+            device.initialize_slot_context(
+                port_index as u8 + 1,
+                speed,
+                routing,
+                parent_hub_slot_id,
+                parent_port_index,
+            );
 
             let transfer_ring_dequeue_pointer = device
                 .transfer_ring_at(ep0_dci)
@@ -578,7 +597,7 @@ where
             );
 
             let slot_context = device.slot_context();
-            log::debug!("{}", slot_context.speed());
+            log::debug!("slot_context.speed(): {}", slot_context.speed());
             // todo: check this calculation based on xhci spec
             let max_packet_size = Self::max_packet_size_for_control_pipe(slot_context.speed());
             // let max_packet_size = Self::max_packet_size_for_control_pipe(4); // SuperSpeed
@@ -953,6 +972,9 @@ where
                 init_port_device.port_index as usize,
                 slot_id as usize,
                 init_port_device.routing,
+                init_port_device.speed,
+                init_port_device.parent_hub_slot_id,
+                init_port_device.parent_port_index,
             );
 
             let completion = CommandCompletionFuture::new(
@@ -1160,7 +1182,7 @@ where
                     port_configure_state.addressing_port_index.unwrap()
                 };
 
-                self.address_device_at(addressing_port_idx, slot_id as usize, 0);
+                self.address_device_at(addressing_port_idx, slot_id as usize, 0, 5, None, None);
             }
             trb::command::Allowed::DisableSlot(_) => todo!(),
             trb::command::Allowed::AddressDevice(_address_device) => {

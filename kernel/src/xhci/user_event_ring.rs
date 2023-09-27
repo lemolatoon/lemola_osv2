@@ -11,6 +11,8 @@ pub struct InitPortDevice {
     pub port_index: u8,
     pub routing: u32,
     pub speed: u8,
+    pub parent_hub_slot_id: Option<u8>,
+    pub parent_port_index: Option<u8>,
 }
 
 #[derive(Debug)]
