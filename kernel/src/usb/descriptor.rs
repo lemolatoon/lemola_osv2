@@ -96,11 +96,11 @@ impl<'a> Iterator for DescriptorIter<'a> {
 #[repr(C)]
 pub struct HubDescriptor {
     ///  Number of bytes in this descriptor, including this byte
-    b_desc_length: u8,
+    pub b_desc_length: u8,
     ///  Descriptor Type, value: 29H for hub descriptor
-    b_descriptor_type: u8,
+    pub b_descriptor_type: u8,
     /// Number of downstream facing ports that this hub supports
-    b_nbr_ports: u8,
+    pub b_nbr_ports: u8,
     /// D1...D0: Logical Power Switching Mode
     ///
     ///     00: Ganged power switching (all ports’ power at once)
@@ -140,15 +140,15 @@ pub struct HubDescriptor {
     ///     1: Port Indicators are supported on its downstream facing ports and the PORT_INDICATOR request controls the indicators. See Section 11.5.3.
     ///
     /// D15...D8: Reserved
-    w_hub_characteristics: u16,
+    pub w_hub_characteristics: u16,
     /// Time (in 2 ms intervals) from the time the power-on
     /// sequence begins on a port until power is good on that
     /// port. The USB System Software uses this value to
     /// determine how long to wait before accessing a
     /// powered-on port.
-    b_pwr_on_2_pwr_good: u8,
+    pub b_pwr_on_2_pwr_good: u8,
     /// Maximum current requirements of the Hub Controller electronics in mA.
-    b_hub_contr_current: u8,
+    pub b_hub_contr_current: u8,
     // DeviceRemovable: Variable depending on number of ports on hub
     // PortPwrCtrlMask: Variable depending on number of ports on hub
 }

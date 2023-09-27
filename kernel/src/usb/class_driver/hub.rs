@@ -1,6 +1,6 @@
 use core::mem::MaybeUninit;
 
-use kernel_lib::await_sync;
+use kernel_lib::{await_sync, futures::yield_pending};
 use usb_host::{
     ConfigurationDescriptor, DescriptorType, Direction, DriverError, RequestCode, RequestDirection,
     RequestKind, RequestRecipient, RequestType, TransferError, TransferType, WValue,
@@ -112,9 +112,12 @@ enum HubState {
     GetConfig,
     SetConfig,
     GetHubDescriptor,
-    GetStatus,
+    InitPort(u8),
     Running,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitPortState {}
 
 // The maximum size configuration descriptor we can handle.
 const CONFIG_BUFFER_LEN: usize = 256;
@@ -124,6 +127,8 @@ struct HubDevice {
     address: u8,
     ep0: Endpoint,
     config_descriptor: Option<ConfigurationDescriptor>,
+    number_of_ports: u8,
+    power_on_2_power_good: u8,
 }
 impl HubDevice {
     fn new(address: u8, max_packet_size: u8) -> HubDevice {
@@ -139,6 +144,8 @@ impl HubDevice {
                 u16::from(max_packet_size),
             ),
             config_descriptor: None,
+            number_of_ports: 0,
+            power_on_2_power_good: 0,
         }
     }
 
@@ -294,12 +301,116 @@ impl HubDevice {
                 .await?;
 
                 log::debug!("hub descriptor: {:?}", hub_descriptor);
-                self.state = HubState::GetStatus;
+                self.number_of_ports = hub_descriptor.b_nbr_ports;
+                self.power_on_2_power_good = hub_descriptor.b_pwr_on_2_pwr_good;
+                self.state = HubState::InitPort(0);
             }
-            HubState::GetStatus => {
-                todo!()
+            HubState::InitPort(port_index) if port_index < self.number_of_ports => {
+                sleep(5000);
+                // 11.24.1 Standard Requests
+
+                // 11.24.2.7.1.6 PORT_POWER
+                // SET_FEATURE / PORT_POWER
+
+                // 00100011B
+                let request_type = RequestType::from((
+                    RequestDirection::HostToDevice,
+                    RequestKind::Class,
+                    RequestRecipient::Other,
+                )); // 0x23
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(request_type) }, 0x23);
+
+                // Feature Selector
+                let mut w_value = WValue::default();
+                w_value.set_w_value_lo(PortFeatureSelector::PortPower as u8);
+                let w_index = port_index as u16 + 1;
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    request_type,
+                    RequestCode::SetFeature,
+                    w_value,
+                    w_index,
+                    none,
+                )
+                .await?;
+
+                yield_pending().await;
+                sleep(self.power_on_2_power_good as usize * 2);
+                log::debug!("port[{}] powered on", port_index);
+
+                // 11.24.2.2 Clear Port Feature
+                // CLEAR_FEATURE / PORT_CONNECTION
+
+                // 00100011B
+                let request_type = RequestType::from((
+                    RequestDirection::HostToDevice,
+                    RequestKind::Class,
+                    RequestRecipient::Other,
+                )); // 0x23
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(request_type) }, 0x23);
+
+                // Feature Selector
+                let mut w_value = WValue::default();
+                // 11.24.2.7.2.1 C_PORT_CONNECTION
+                // TODO:w_valueは selector | port じゃないのか？
+                w_value.set_w_value_lo(PortFeatureSelector::CPortConnection as u8);
+                let w_index = port_index as u16 + 1;
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    request_type,
+                    RequestCode::ClearFeature,
+                    w_value,
+                    w_index,
+                    None,
+                )
+                .await?;
+
+                yield_pending().await;
+                log::debug!("port[{}] CPortConnection cleared", port_index);
+
+                // 11.24.2.7 Get Port Status
+                // 10100011B
+                let request_type = RequestType::from((
+                    RequestDirection::DeviceToHost,
+                    RequestKind::Class,
+                    RequestRecipient::Other,
+                )); // 0xa3
+                assert_eq!(unsafe { core::mem::transmute::<_, u8>(request_type) }, 0xa3);
+
+                let w_value = WValue::default();
+                let w_index = port_index as u16 + 1;
+                // 11.24.2.7.1 Port Status Bits
+                let mut status = [0u8; 4];
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    request_type,
+                    RequestCode::GetStatus,
+                    w_value,
+                    w_index,
+                    Some(&mut status),
+                )
+                .await?;
+
+                if status[0] & 0x01 == 0 {
+                    log::debug!("port[{}] is not connected", port_index);
+                    self.state = HubState::InitPort(port_index + 1);
+                    return Ok(());
+                } else {
+                    log::debug!("port[{}] is connected!!", port_index);
+                }
+
+                yield_pending().await;
+
+                self.state = HubState::InitPort(port_index + 1);
             }
-            HubState::Running => todo!(),
+            HubState::InitPort(_) => {
+                // all ports initialized
+                self.state = HubState::Running;
+            }
+            HubState::Running => {}
         }
 
         Ok(())
@@ -310,4 +421,36 @@ unsafe fn to_slice_mut<T>(v: &mut T) -> &mut [u8] {
     let ptr = v as *mut T as *mut u8;
     let len = core::mem::size_of::<T>();
     core::slice::from_raw_parts_mut(ptr, len)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HubFeatureSelector {
+    CHubLocalPower = 0,
+    CHubOverCurrent = 1,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortFeatureSelector {
+    PortConnection = 0,
+    PortEnable = 1,
+    PortSuspend = 2,
+    PortOverCurrent = 3,
+    PortReset = 4,
+    PortPower = 8,
+    PortLowSpeed = 9,
+    CPortConnection = 16,
+    CPortEnable = 17,
+    CPortSuspend = 18,
+    CPortOverCurrent = 19,
+    CPortReset = 20,
+    PortTest = 21,
+    PortIndicator = 22,
+}
+
+fn sleep(millis: usize) {
+    for i in 0..(millis * 1000) {
+        let mut count = 0usize;
+        unsafe {
+            (&mut count as *mut usize).write_volatile(i);
+        }
+    }
 }
