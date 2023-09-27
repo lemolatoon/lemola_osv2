@@ -1241,11 +1241,12 @@ where
                         let device = kernel_lib::lock!(device);
                         device.as_ref().unwrap().device_address()
                     };
-                    let mut hub = kernel_lib::lock!(class_driver_manager.hub());
+                    let hub = kernel_lib::lock!(class_driver_manager.hub());
                     log::error!(
-                        "normal trb for hub driver not yet implemented, address: {}, slot_id: {}",
+                        "normal trb for hub driver not yet implemented, address: {}, slot_id: {}, hub: {:?}",
                         address,
                         slot_id,
+                        hub
                     );
                     return;
                 }

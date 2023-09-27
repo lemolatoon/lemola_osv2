@@ -751,6 +751,7 @@ unsafe fn to_slice_mut<T>(v: &mut T) -> &mut [u8] {
     core::slice::from_raw_parts_mut(ptr, len)
 }
 
+#[derive(Debug)]
 pub struct Endpoint {
     address: u8,
     endpoint_num: u8,

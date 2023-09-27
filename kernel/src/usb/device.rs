@@ -11,7 +11,8 @@ use usb_host::{
 use xhci::{
     accessor::Mapper,
     context::{
-        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte, SlotHandler,
+        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte,
+        InputControlHandler, SlotHandler,
     },
     ring::trb::{
         command, event,
@@ -29,7 +30,9 @@ use crate::{
     },
     xhci::{
         command_ring::CommandRing,
-        event_ring::{EventRing, TransferEventFuture, TransferEventWaitKind},
+        event_ring::{
+            CommandCompletionFuture, EventRing, TransferEventFuture, TransferEventWaitKind,
+        },
         transfer_ring::TransferRing,
         trb::TrbRaw,
     },
@@ -170,6 +173,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
     pub fn slot_context(&self) -> &dyn SlotHandler {
         use xhci::context::InputHandler;
         self.input_context.0.device().slot()
+    }
+
+    pub fn slot_context_mut(&mut self) -> &mut (dyn SlotHandler + Send + Sync) {
+        use xhci::context::InputHandler;
+        unsafe { core::mem::transmute(self.input_context.0.device_mut().slot_mut()) }
+    }
+
+    pub fn input_context_mut(&mut self) -> &mut (dyn InputControlHandler + Send + Sync) {
+        use xhci::context::InputHandler;
+        unsafe { core::mem::transmute(self.input_context.0.control_mut()) }
     }
 
     pub fn endpoint_context(&self, dci: DeviceContextIndex) -> &dyn EndpointHandler {
@@ -503,6 +516,59 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         Ok(w_length as usize - trb.trb_transfer_length() as usize)
     }
 
+    pub async fn async_register_hub(
+        &mut self,
+        _address: u8,
+    ) -> Result<(), usb_host::TransferError> {
+        // https://github.com/foliagecanine/tritium-os/blob/master/kernel/arch/i386/usb/xhci.c#L810
+        log::debug!("[xHCI] Attempting to register hub");
+        let slot_context = self.slot_context_mut();
+
+        // 6.2.2 Slot Context
+        // Context Entries. This field identifies the index of the last valid Endpoint Context within this
+        // Device Context structure. The value of ‘0’ is Reserved and is not a valid entry for this field. Valid
+        // entries for this field shall be in the range of 1-31. This field indicates the size of the Device
+        // Context structure. For example, ((Context Entries+1) * 32 bytes) = Total bytes for this structure.
+        // Note, Output Context Entries values are written by the xHC, and Input Context Entries values are
+        // written by software.
+        const XHCI_SLOT_ENTRY_HUB: u8 = 26;
+        slot_context.set_context_entries(XHCI_SLOT_ENTRY_HUB);
+
+        let input_context = self.input_context_mut();
+        input_context.set_add_context_flag(0);
+        input_context.clear_add_context_flag(1);
+        for i in 2..32 {
+            input_context.clear_drop_context_flag(i);
+            input_context.clear_add_context_flag(i);
+        }
+
+        let input_context_pointer = &*self.input_context as *const InputContextWrapper as u64;
+
+        let mut evaluate_context = command::EvaluateContext::new();
+        evaluate_context.set_input_context_pointer(input_context_pointer);
+        evaluate_context.set_slot_id(self.slot_id() as u8);
+        let trb = command::Allowed::EvaluateContext(evaluate_context);
+
+        let trb_ptr = {
+            let mut command_ring = kernel_lib::lock!(self.command_ring);
+            command_ring.push(trb) as u64
+        };
+        {
+            let mut registers = kernel_lib::lock!(self.registers);
+            registers.doorbell.update_volatile_at(0, |doorbell| {
+                doorbell.set_doorbell_target(0);
+                doorbell.set_doorbell_stream_id(0);
+            });
+        }
+        let event_ring = Arc::clone(&self.event_ring);
+        let registers = Arc::clone(&self.registers);
+        let recieved = CommandCompletionFuture::new(event_ring, registers, trb_ptr).await;
+        log::debug!("recieved: {:?}", &recieved);
+        assert!(recieved.completion_code().unwrap() == event::CompletionCode::Success);
+
+        Ok(())
+    }
+
     async fn init_transfer_ring_for_interrupt_at(
         &mut self,
         ep: &mut (dyn usb_host::Endpoint + Send + Sync),
@@ -789,7 +855,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         let w_index = 0;
 
         let mut count = 0;
-        let length = loop {
+        loop {
             let length = self
                 .async_control_transfer(
                     &mut endpoint_id,
@@ -807,8 +873,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             if count > 100 {
                 panic!("too many retries: {:?}", length);
             }
-        };
-        length
+        }
     }
 }
 
@@ -1012,5 +1077,9 @@ impl<M: Mapper + Clone + Send + Sync + Sync + Send> AsyncUSBHost
         _buf: &[u8],
     ) -> Result<usize, usb_host::TransferError> {
         todo!()
+    }
+
+    async fn register_hub(&mut self, address: u8) -> Result<(), usb_host::TransferError> {
+        self.async_register_hub(address).await
     }
 }

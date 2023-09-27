@@ -1,15 +1,29 @@
 use core::mem::MaybeUninit;
 
 use kernel_lib::await_sync;
-use usb_host::{Driver, DriverError, TransferError, USBHost};
+use usb_host::{
+    ConfigurationDescriptor, DescriptorType, Direction, DriverError, RequestCode, RequestDirection,
+    RequestKind, RequestRecipient, RequestType, TransferError, TransferType, WValue,
+};
 
-use crate::usb::traits::{AsyncDriver, AsyncUSBHost};
+use crate::usb::{
+    descriptor::{DescriptorIter, DescriptorRef},
+    traits::{AsyncDriver, AsyncUSBHost},
+};
+
+use super::Endpoint;
 
 const MAX_DEVICES: usize = 127;
 
 #[derive(Debug)]
 pub struct HubDriver {
     devices: [Option<HubDevice>; MAX_DEVICES],
+}
+
+impl Default for HubDriver {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HubDriver {
@@ -94,36 +108,170 @@ impl AsyncDriver for HubDriver {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HubState {
-    Init,
+    Addressed,
+    GetConfig,
+    SetConfig,
+    GetHubDescriptor,
     Running,
 }
 
+// The maximum size configuration descriptor we can handle.
+const CONFIG_BUFFER_LEN: usize = 256;
 #[derive(Debug)]
 struct HubDevice {
     pub state: HubState,
     address: u8,
-    max_packet_size: u8,
+    ep0: Endpoint,
+    config_descriptor: Option<ConfigurationDescriptor>,
 }
 impl HubDevice {
-    fn new(address: u8, b_max_packet_size: u8) -> HubDevice {
+    fn new(address: u8, max_packet_size: u8) -> HubDevice {
         Self {
-            state: HubState::Init,
+            state: HubState::Addressed,
             address,
-            max_packet_size: b_max_packet_size,
+            ep0: Endpoint::new(
+                address,
+                0,
+                0,
+                TransferType::Control,
+                Direction::In,
+                u16::from(max_packet_size),
+            ),
+            config_descriptor: None,
         }
     }
 
     async fn fsm(
         &mut self,
-        millis: usize,
-        usbhost: &mut (dyn AsyncUSBHost + Send + Sync),
+        _millis: usize,
+        host: &mut (dyn AsyncUSBHost + Send + Sync),
     ) -> Result<(), TransferError> {
-        log::warn!(
-            "actual HubDevice::fsm implementation is not implemented, just set state to Running"
-        );
+        // https://forum.osdev.org/viewtopic.php?f=1&t=37441
 
-        self.state = HubState::Running;
+        // TODO: either we need another `control_transfer` that
+        // doesn't take data, or this `none` value needs to be put in
+        // the usb-host layer. None of these options are good.
+        let none: Option<&mut [u8]> = None;
+        unsafe {
+            static mut LAST_STATE: HubState = HubState::Addressed;
+            if LAST_STATE != self.state {
+                log::info!("{:?} -> {:?}", LAST_STATE, self.state);
+                LAST_STATE = self.state;
+            }
+        }
+        match self.state {
+            HubState::Addressed => {
+                // do nothing first time
+                self.state = HubState::GetConfig;
+            }
+            HubState::GetConfig => {
+                let mut conf_desc: MaybeUninit<ConfigurationDescriptor> = MaybeUninit::uninit();
+                let desc_buf = unsafe { to_slice_mut(&mut conf_desc) };
+                let len = host
+                    .control_transfer(
+                        &mut self.ep0,
+                        RequestType::from((
+                            RequestDirection::DeviceToHost,
+                            RequestKind::Standard,
+                            RequestRecipient::Device,
+                        )),
+                        RequestCode::GetDescriptor,
+                        WValue::from((0, DescriptorType::Configuration as u8)),
+                        0,
+                        Some(desc_buf),
+                    )
+                    .await?;
+                assert!(len == core::mem::size_of::<ConfigurationDescriptor>());
+                let conf_desc = unsafe { conf_desc.assume_init() };
+
+                if (conf_desc.w_total_length as usize) > CONFIG_BUFFER_LEN {
+                    log::trace!("config descriptor: {:?}", conf_desc);
+                    return Err(TransferError::Permanent("config descriptor too large"));
+                }
+
+                // TODO: do a real allocation later. For now, keep a
+                // large-ish static buffer and take an appropriately
+                // sized slice into it for the transfer.
+                #[allow(clippy::uninit_assumed_init)]
+                #[allow(invalid_value)]
+                let mut config =
+                    unsafe { MaybeUninit::<[u8; CONFIG_BUFFER_LEN]>::uninit().assume_init() };
+                if CONFIG_BUFFER_LEN < conf_desc.w_total_length as usize {
+                    log::trace!("config descriptor: {:?}", conf_desc);
+                    return Err(TransferError::Permanent("config descriptor too large"));
+                }
+                let config_buf = &mut config[..conf_desc.w_total_length as usize];
+                let len = host
+                    .control_transfer(
+                        &mut self.ep0,
+                        RequestType::from((
+                            RequestDirection::DeviceToHost,
+                            RequestKind::Standard,
+                            RequestRecipient::Device,
+                        )),
+                        RequestCode::GetDescriptor,
+                        WValue::from((0, DescriptorType::Configuration as u8)),
+                        0,
+                        Some(config_buf),
+                    )
+                    .await?;
+                assert!(len == conf_desc.w_total_length as usize);
+
+                for descriptor in DescriptorIter::new(config_buf) {
+                    match descriptor {
+                        DescriptorRef::Configuration(conf_desc) => {
+                            log::debug!("config descriptor: {:?}", conf_desc);
+                            self.config_descriptor = Some(*conf_desc);
+                        }
+                        DescriptorRef::Interface(_) => {}
+                        DescriptorRef::Endpoint(_) => {}
+                        DescriptorRef::Unknown => {}
+                    }
+                }
+
+                self.state = HubState::SetConfig;
+            }
+            HubState::SetConfig => {
+                // https://github.com/foliagecanine/tritium-os/blob/d8b78298f828c0745a480d309aceb4fd503c421f/kernel/usb/usbhub.c#L63
+                log::debug!("Initializing hub at {}", self.address);
+                let config_value = self
+                    .config_descriptor
+                    .as_ref()
+                    .unwrap()
+                    .b_configuration_value;
+                let mut w_value = WValue::default();
+                w_value.set_w_value_lo(config_value);
+
+                host.control_transfer(
+                    &mut self.ep0,
+                    RequestType::from((
+                        RequestDirection::HostToDevice,
+                        RequestKind::Standard,
+                        RequestRecipient::Device,
+                    )),
+                    RequestCode::SetConfiguration,
+                    w_value,
+                    0,
+                    none,
+                )
+                .await?;
+
+                host.register_hub(self.address).await.unwrap();
+
+                self.state = HubState::GetHubDescriptor;
+            }
+            HubState::GetHubDescriptor => {
+                todo!()
+            }
+            HubState::Running => todo!(),
+        }
 
         Ok(())
     }
+}
+
+unsafe fn to_slice_mut<T>(v: &mut T) -> &mut [u8] {
+    let ptr = v as *mut T as *mut u8;
+    let len = core::mem::size_of::<T>();
+    core::slice::from_raw_parts_mut(ptr, len)
 }

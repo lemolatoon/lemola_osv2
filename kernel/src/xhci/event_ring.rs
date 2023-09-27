@@ -68,6 +68,7 @@ impl EventRingSegmentTableEntry {
 
 #[derive(Debug)]
 pub struct EventRing<A: Allocator> {
+    #[allow(dead_code)]
     trb_buffer: Box<[trb::Link], A>,
     popped: Vec<event::Allowed>,
     event_ring_segment_table: Box<EventRingSegmentTableEntry, A>,
@@ -366,10 +367,24 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     }
 }
 
-struct CommandCompletionFuture<M: Mapper + Clone + Send + Sync> {
+pub struct CommandCompletionFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: u64, // trb_ptr
+}
+
+impl<M: Mapper + Clone + Send + Sync> CommandCompletionFuture<M> {
+    pub fn new(
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+        registers: Arc<Mutex<Registers<M>>>,
+        wait_on: u64,
+    ) -> Self {
+        Self {
+            event_ring,
+            registers,
+            wait_on,
+        }
+    }
 }
 
 impl<M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture<M> {
