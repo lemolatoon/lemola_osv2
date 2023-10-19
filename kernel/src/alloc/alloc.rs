@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use core::{alloc::LayoutError, mem::MaybeUninit};
 use kernel_lib::alloc::FixedLengthAllocator;
 
-const HEAP_SIZE: usize = 1 << 22;
+const HEAP_SIZE: usize = 1 << 21;
 
 pub type GlobalAllocator = FixedLengthAllocator<HEAP_SIZE>;
 
