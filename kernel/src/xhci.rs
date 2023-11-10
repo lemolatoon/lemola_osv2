@@ -16,8 +16,9 @@ pub mod event_ring;
 pub mod port;
 pub mod transfer_ring;
 pub mod trb;
+pub mod user_event_ring;
 
-pub type Controller = XhciController<MemoryMapper, &'static GlobalAllocator>;
+pub type Controller<MF, KF> = XhciController<MemoryMapper, &'static GlobalAllocator, MF, KF>;
 
 const LOCAL_APIC_ADDRESS: usize = 0xfee0_0000;
 pub fn read_local_apic_id(offset: usize) -> u8 {
@@ -28,23 +29,23 @@ pub fn write_local_apic_id(offset: usize, data: u32) {
     unsafe { ((LOCAL_APIC_ADDRESS + offset) as *mut u32).write_volatile(data) };
 }
 
-pub async fn poll_forever<MF, KF>(
-    controller: &Controller,
-    class_driver_manager: &ClassDriverManager<MF, KF>,
-) where
-    MF: Fn(u8, &[u8]),
-    KF: Fn(u8, &[u8]),
+pub async fn poll_forever<MF, KF>(controller: &Controller<MF, KF>)
+where
+    MF: Fn(u8, &[u8]) + 'static,
+    KF: Fn(u8, &[u8]) + 'static,
 {
     loop {
         {
             if controller.pending_already_popped_queue() {
                 log::debug!("having pending already popped queue");
-                controller.process_once_received(class_driver_manager).await;
+                controller.process_once_received().await;
             }
             if controller.pending_event() {
                 log::debug!("having pending event");
-                controller.process_event(class_driver_manager).await;
+                controller.process_event().await;
             }
+
+            controller.process_user_event().await;
         }
 
         for _ in 0..100 {
@@ -53,22 +54,17 @@ pub async fn poll_forever<MF, KF>(
     }
 }
 
-pub async fn tick_mouse_forever<MF, KF>(
-    controller: &Controller,
-    class_driver_manager: &ClassDriverManager<MF, KF>,
-) where
-    MF: Fn(u8, &[u8]),
-    KF: Fn(u8, &[u8]),
+pub async fn tick_mouse_forever<MF, KF>(controller: &Controller<MF, KF>)
+where
+    MF: Fn(u8, &[u8]) + 'static,
+    KF: Fn(u8, &[u8]) + 'static,
 {
     let mut count = 0;
     loop {
         // for avoiding deadlock
         // x86_64::instructions::interrupts::disable();
         {
-            controller
-                .async_tick_mouse(count, class_driver_manager)
-                .await
-                .unwrap();
+            controller.async_tick_mouse(count).await.unwrap();
         }
         count += 1;
         yield_pending().await;
@@ -76,24 +72,25 @@ pub async fn tick_mouse_forever<MF, KF>(
     }
 }
 
-pub async fn tick_keyboard_forever<MF, KF>(
-    controller: &Controller,
-    class_driver_manager: &ClassDriverManager<MF, KF>,
-) where
-    MF: Fn(u8, &[u8]),
-    KF: Fn(u8, &[u8]),
+pub async fn tick_keyboard_forever<MF, KF>(controller: &Controller<MF, KF>)
+where
+    MF: Fn(u8, &[u8]) + 'static,
+    KF: Fn(u8, &[u8]) + 'static,
 {
     let count = 0;
     loop {
-        controller
-            .async_tick_keyboard(count, class_driver_manager)
-            .await
-            .unwrap();
+        controller.async_tick_keyboard(count).await.unwrap();
         yield_pending().await;
     }
 }
 
-pub fn init_xhci_controller() -> Controller {
+pub fn init_xhci_controller<MF, KF>(
+    class_driver_manager: &'static ClassDriverManager<MF, KF>,
+) -> Controller<MF, KF>
+where
+    MF: Fn(u8, &[u8]) + 'static,
+    KF: Fn(u8, &[u8]) + 'static,
+{
     let devices = crate::pci::register::scan_all_bus();
     for device in &devices {
         serial_println!(
@@ -145,11 +142,12 @@ pub fn init_xhci_controller() -> Controller {
 
     log::info!("xhc_mmio_base: {:?}", xhc_mmio_base as *const c_void);
     let memory_mapper = crate::memory::MemoryMapper::new();
-    let controller = unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper) };
+    let controller =
+        unsafe { XhciController::new(xhc_mmio_base as usize, memory_mapper, class_driver_manager) };
     log::info!("xhc initialized");
     controller.run();
 
-    for port_idx in (0..controller.number_of_ports()).rev() {
+    for port_idx in 0..controller.number_of_ports() {
         let registers = controller.registers();
         let port_register_sets = &registers.port_register_set;
         let is_connected = port_register_sets
@@ -165,4 +163,24 @@ pub fn init_xhci_controller() -> Controller {
     log::debug!("Configured ports");
 
     controller
+}
+
+pub fn next_route(routing: u32, port: u8) -> u32 {
+    // https://github.com/foliagecanine/tritium-os/blob/master/kernel/arch/i386/usb/xhci.c#L845
+    let mut shift = 0;
+    for _ in 0..4 {
+        if routing & (0xf << shift) == 0 {
+            log::debug!(
+                "next_route: routing = {:x}, port = {}, shift = {}, ret = {:x}",
+                routing,
+                port,
+                shift,
+                routing | ((port as u32) << shift)
+            );
+            return routing | ((port as u32) << shift);
+        }
+        shift += 4;
+    }
+
+    0
 }

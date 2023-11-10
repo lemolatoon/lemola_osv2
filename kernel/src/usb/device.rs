@@ -11,7 +11,8 @@ use usb_host::{
 use xhci::{
     accessor::Mapper,
     context::{
-        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte, SlotHandler,
+        Device32Byte, EndpointHandler, EndpointType, Input32Byte, InputControl32Byte,
+        InputControlHandler, SlotHandler,
     },
     ring::trb::{
         command, event,
@@ -29,9 +30,13 @@ use crate::{
     },
     xhci::{
         command_ring::CommandRing,
-        event_ring::{EventRing, TransferEventFuture, TransferEventWaitKind},
+        event_ring::{
+            CommandCompletionFuture, EventRing, TransferEventFuture, TransferEventWaitKind,
+        },
+        next_route,
         transfer_ring::TransferRing,
         trb::TrbRaw,
+        user_event_ring::{InitPortDevice, UserEvent, UserEventRing},
     },
 };
 
@@ -76,8 +81,10 @@ pub struct DeviceContextInfo<M: Mapper + Clone + Send + Sync, A: Allocator> {
     registers: Arc<Mutex<xhci::Registers<M>>>,
     event_ring: Arc<Mutex<EventRing<A>>>,
     command_ring: Arc<Mutex<CommandRing>>,
+    user_event_ring: Arc<Mutex<UserEventRing>>,
     slot_id: usize,
     port_index: usize,
+    routing: u32,
     descriptors: Option<Vec<Descriptor>>,
     pub input_context: Box<InputContextWrapper, A>,
     pub device_context: Box<DeviceContextWrapper, A>,
@@ -88,10 +95,12 @@ pub struct DeviceContextInfo<M: Mapper + Clone + Send + Sync, A: Allocator> {
 impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAllocator> {
     pub fn new(
         port_index: usize,
+        routing: u32,
         slot_id: usize,
         registers: Arc<Mutex<xhci::Registers<M>>>,
         event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
         command_ring: Arc<Mutex<CommandRing>>,
+        user_event_ring: Arc<Mutex<UserEventRing>>,
     ) -> Self {
         const TRANSFER_RING_BUF_SIZE: usize = 32;
         #[allow(clippy::type_complexity)]
@@ -117,9 +126,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             registers,
             event_ring,
             command_ring,
+            user_event_ring,
             slot_id,
             port_index,
             descriptors: None,
+            routing,
             // 4.3.3 Device Slot Initialization
             // 1. Allocate an Input Context ...
             input_context: InputContextWrapper::new(), // 0 filled
@@ -152,16 +163,29 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         control.set_add_context_flag(dci.address() as usize);
     }
 
-    pub fn initialize_slot_context(&mut self, port_id: u8, port_speed: u8) {
+    pub fn initialize_slot_context(
+        &mut self,
+        port_id: u8,
+        port_speed: u8,
+        routing: u32,
+        parent_hub_slot_id: Option<u8>,
+        parent_port_index: Option<u8>,
+    ) {
         // 4.3.3 Device Slot Initialization
         // 3. Initialize the Input Slot Context data structure (6.2.2)
         use xhci::context::InputHandler;
         log::debug!("initialize_slot_context: port_id: {}", port_id);
         let slot_context = self.input_context.0.device_mut().slot_mut();
         // Route String = Topology defined. (To access a device attached directly to a Root Hub port, the Route String shall equal '0'.)
-        slot_context.set_route_string(0);
+        slot_context.set_route_string(routing & 0x3_ffff);
         // and the Root Hub Port Number shall indicate the specific Root Hub port to use.
         slot_context.set_root_hub_port_number(port_id);
+        if let Some(parent_hub_slot_id) = parent_hub_slot_id {
+            slot_context.set_parent_hub_slot_id(parent_hub_slot_id);
+        }
+        if let Some(parent_port_index) = parent_port_index {
+            slot_context.set_parent_port_number(parent_port_index);
+        }
         // Context Entries = 1
         slot_context.set_context_entries(1);
         slot_context.set_speed(port_speed);
@@ -170,6 +194,16 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
     pub fn slot_context(&self) -> &dyn SlotHandler {
         use xhci::context::InputHandler;
         self.input_context.0.device().slot()
+    }
+
+    pub fn slot_context_mut(&mut self) -> &mut (dyn SlotHandler + Send + Sync) {
+        use xhci::context::InputHandler;
+        unsafe { core::mem::transmute(self.input_context.0.device_mut().slot_mut()) }
+    }
+
+    pub fn input_context_mut(&mut self) -> &mut (dyn InputControlHandler + Send + Sync) {
+        use xhci::context::InputHandler;
+        unsafe { core::mem::transmute(self.input_context.0.control_mut()) }
     }
 
     pub fn endpoint_context(&self, dci: DeviceContextIndex) -> &dyn EndpointHandler {
@@ -261,111 +295,127 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         }
         let descriptors = self.request_config_descriptor_and_rest().await;
         log::debug!("descriptors requested with config: {:?}", descriptors);
-        if device_descriptor.b_device_class == 0 {
-            let mut boot_keyboard_interface = None;
-            let mut mouse_interface = None;
-            let mut endpoint_descriptor = None;
-            for desc in descriptors {
-                if let Descriptor::Interface(interface) = desc {
-                    match (
-                        interface.b_interface_class,
-                        interface.b_interface_sub_class,
-                        interface.b_interface_protocol,
-                    ) {
-                        (3, 1, 1) => {
-                            log::debug!("HID boot keyboard interface found");
-                            boot_keyboard_interface = Some(interface);
-                        }
-                        (3, 1, 2) => {
-                            log::debug!("HID mouse interface found");
-                            mouse_interface = Some(interface);
-                        }
-                        unknown => {
-                            log::debug!("unknown interface found: {:?}", unknown);
-                        }
-                    };
-                } else if let Descriptor::Endpoint(endpoint) = desc {
-                    log::debug!("endpoint: {:?}", endpoint);
-                    if (boot_keyboard_interface.is_some() || mouse_interface.is_some())
-                        && endpoint_descriptor.is_none()
-                    {
-                        endpoint_descriptor = Some(endpoint);
+        let mut boot_keyboard_interface = None;
+        let mut mouse_interface = None;
+        let mut hub_interface = None;
+        let mut endpoint_descriptor = None;
+        for desc in descriptors {
+            if let Descriptor::Interface(interface) = desc {
+                match (
+                    interface.b_interface_class,
+                    interface.b_interface_sub_class,
+                    interface.b_interface_protocol,
+                ) {
+                    (3, 1, 1) => {
+                        log::debug!("HID boot keyboard interface found");
+                        boot_keyboard_interface = Some(interface);
                     }
-                }
-            }
-            if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
-                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
-                let address = self.device_address();
-                log::info!("add keyboard device");
-                class_drivers
-                    .add_keyboard_device(self.slot_id(), device_descriptor, address)
-                    .unwrap();
-                {
-                    let mut driver_info = kernel_lib::lock!(class_drivers.keyboard());
-                    driver_info.driver.tick_until_running_state(self).unwrap();
-                    let ep = driver_info.driver.endpoints_mut(address)[0]
-                        .as_mut()
-                        .unwrap();
-                    await_sync!(self.init_transfer_ring_for_interrupt_at(
-                        ep,
-                        endpoint_descriptor.as_ref().unwrap()
-                    ))
-                    .unwrap();
+                    (3, 1, 2) => {
+                        log::debug!("HID mouse interface found");
+                        mouse_interface = Some(interface);
+                    }
+                    (9, 0, protocol) => {
+                        match protocol {
+                            0 => log::debug!("Full-Speed hub found"),
+                            1 => log::debug!("Hi-speed hub with single TT found"),
+                            2 => log::debug!("Hi-speed hub with multiple TTs found"),
+                            _ => log::debug!("unknown hub found"),
+                        };
+                        hub_interface = Some(interface);
+                    }
+                    unknown => {
+                        log::debug!("unknown interface found: {:?}", unknown);
+                    }
                 };
-                let transfer_ring = self
-                    .transfer_ring_at_mut(dci)
-                    .as_mut()
-                    .expect("transfer ring not allocated")
-                    .as_mut();
-                transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
+            } else if let Descriptor::Endpoint(endpoint) = desc {
+                log::debug!("endpoint: {:?}", endpoint);
+                if (boot_keyboard_interface.is_some() || mouse_interface.is_some())
+                    && endpoint_descriptor.is_none()
                 {
-                    // door-bell
-                    let mut registers = kernel_lib::lock!(self.registers);
-                    registers
-                        .doorbell
-                        .update_volatile_at(self.slot_id(), |doorbell| {
-                            doorbell.set_doorbell_target(dci.address());
-                            doorbell.set_doorbell_stream_id(0);
-                        });
+                    endpoint_descriptor = Some(endpoint);
                 }
             }
-            if let Some(_mouse_interface) = mouse_interface {
-                let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
-                let address = self.device_address();
-                class_drivers
-                    .add_mouse_device(self.slot_id(), device_descriptor, address)
-                    .unwrap();
-                {
-                    let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
-                    driver_info.driver.tick_until_running_state(self).unwrap();
-                    let ep = driver_info.driver.endpoints_mut(address)[0]
-                        .as_mut()
-                        .unwrap();
-                    await_sync!(self.init_transfer_ring_for_interrupt_at(
-                        ep,
-                        endpoint_descriptor.as_ref().unwrap()
-                    ))
-                    .unwrap();
-                };
-                let transfer_ring = self
-                    .transfer_ring_at_mut(dci)
+        }
+        if let Some(_boot_keyboard_interface) = boot_keyboard_interface {
+            let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
+            let address = self.device_address();
+            log::info!("add keyboard device");
+            class_drivers
+                .add_keyboard_device(self.slot_id(), device_descriptor, address)
+                .unwrap();
+            {
+                let mut driver_info = kernel_lib::lock!(class_drivers.keyboard());
+                driver_info.driver.tick_until_running_state(self).unwrap();
+                let ep = driver_info.driver.endpoints_mut(address)[0]
                     .as_mut()
-                    .expect("transfer ring not allocated")
-                    .as_mut();
-                transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
-                {
-                    // door-bell
-                    let mut registers = kernel_lib::lock!(self.registers);
-                    registers
-                        .doorbell
-                        .update_volatile_at(self.slot_id(), |doorbell| {
-                            doorbell.set_doorbell_target(dci.address());
-                            doorbell.set_doorbell_stream_id(0);
-                        });
-                }
+                    .unwrap();
+                await_sync!(self.init_transfer_ring_for_interrupt_at(
+                    ep,
+                    endpoint_descriptor.as_ref().unwrap()
+                ))
+                .unwrap();
+            };
+            let transfer_ring = self
+                .transfer_ring_at_mut(dci)
+                .as_mut()
+                .expect("transfer ring not allocated")
+                .as_mut();
+            transfer_ring.fill_with_normal(keyboard::N_IN_TRANSFER_BYTES);
+            {
+                // door-bell
+                let mut registers = kernel_lib::lock!(self.registers);
+                registers
+                    .doorbell
+                    .update_volatile_at(self.slot_id(), |doorbell| {
+                        doorbell.set_doorbell_target(dci.address());
+                        doorbell.set_doorbell_stream_id(0);
+                    });
             }
-        } else {
-            log::warn!("unknown device class: {}", device_descriptor.b_device_class);
+        }
+        if let Some(_mouse_interface) = mouse_interface {
+            let dci = DeviceContextIndex::from(endpoint_descriptor.as_ref().unwrap());
+            let address = self.device_address();
+            class_drivers
+                .add_mouse_device(self.slot_id(), device_descriptor, address)
+                .unwrap();
+            {
+                let mut driver_info = kernel_lib::lock!(class_drivers.mouse());
+                driver_info.driver.tick_until_running_state(self).unwrap();
+                let ep = driver_info.driver.endpoints_mut(address)[0]
+                    .as_mut()
+                    .unwrap();
+                await_sync!(self.init_transfer_ring_for_interrupt_at(
+                    ep,
+                    endpoint_descriptor.as_ref().unwrap()
+                ))
+                .unwrap();
+            };
+            let transfer_ring = self
+                .transfer_ring_at_mut(dci)
+                .as_mut()
+                .expect("transfer ring not allocated")
+                .as_mut();
+            transfer_ring.fill_with_normal(mouse::N_IN_TRANSFER_BYTES);
+            {
+                // door-bell
+                let mut registers = kernel_lib::lock!(self.registers);
+                registers
+                    .doorbell
+                    .update_volatile_at(self.slot_id(), |doorbell| {
+                        doorbell.set_doorbell_target(dci.address());
+                        doorbell.set_doorbell_stream_id(0);
+                    });
+            }
+        }
+        if let Some(_hub_interface) = hub_interface {
+            let address = self.device_address();
+            class_drivers
+                .add_hub_device(self.slot_id(), device_descriptor, address)
+                .unwrap();
+            {
+                let mut driver_info = kernel_lib::lock!(class_drivers.hub());
+                driver_info.driver.tick_until_running_state(self).unwrap();
+            };
         }
     }
 
@@ -377,11 +427,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         buf: Option<NonNull<[u8]>>,
     ) -> TransferEventWaitKind {
         let dci: DeviceContextIndex = endpoint_id.address();
-        log::debug!(
-            "control_in: setup_data: {:?}, ep addr: {:?}",
-            &setup_data,
-            &dci
-        );
 
         let transfer_ring = self
             .transfer_ring_at_mut(dci)
@@ -438,11 +483,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         };
 
         let mut registers = kernel_lib::lock!(self.registers);
-        log::debug!(
-            "slot_id: {:?}, dci.address(): {}",
-            self.slot_id,
-            dci.address()
-        );
 
         registers
             .doorbell
@@ -463,7 +503,6 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         buf: Option<&mut [u8]>,
     ) -> Result<usize, usb_host::TransferError> {
         let w_length = buf.as_ref().map_or(0, |buf| buf.len() as u16);
-        log::debug!("w_length: {}", w_length);
         let setup_packet = SetupPacket {
             bm_request_type,
             b_request,
@@ -496,6 +535,84 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             }
         }
         Ok(w_length as usize - trb.trb_transfer_length() as usize)
+    }
+
+    pub async fn async_register_hub(
+        &mut self,
+        _address: u8,
+    ) -> Result<(), usb_host::TransferError> {
+        // https://github.com/foliagecanine/tritium-os/blob/master/kernel/arch/i386/usb/xhci.c#L810
+        log::debug!("[xHCI] Attempting to register hub");
+        let slot_context = self.slot_context_mut();
+
+        // 6.2.2 Slot Context
+        // Context Entries. This field identifies the index of the last valid Endpoint Context within this
+        // Device Context structure. The value of ‘0’ is Reserved and is not a valid entry for this field. Valid
+        // entries for this field shall be in the range of 1-31. This field indicates the size of the Device
+        // Context structure. For example, ((Context Entries+1) * 32 bytes) = Total bytes for this structure.
+        // Note, Output Context Entries values are written by the xHC, and Input Context Entries values are
+        // written by software.
+        const XHCI_SLOT_ENTRY_HUB: u8 = 26;
+        slot_context.set_context_entries(XHCI_SLOT_ENTRY_HUB);
+
+        let input_context = self.input_context_mut();
+        input_context.set_add_context_flag(0);
+        input_context.clear_add_context_flag(1);
+        for i in 2..32 {
+            input_context.clear_drop_context_flag(i);
+            input_context.clear_add_context_flag(i);
+        }
+
+        let input_context_pointer = &*self.input_context as *const InputContextWrapper as u64;
+
+        let mut evaluate_context = command::EvaluateContext::new();
+        evaluate_context.set_input_context_pointer(input_context_pointer);
+        evaluate_context.set_slot_id(self.slot_id() as u8);
+        let trb = command::Allowed::EvaluateContext(evaluate_context);
+
+        let trb_ptr = {
+            let mut command_ring = kernel_lib::lock!(self.command_ring);
+            command_ring.push(trb) as u64
+        };
+        {
+            let mut registers = kernel_lib::lock!(self.registers);
+            registers.doorbell.update_volatile_at(0, |doorbell| {
+                doorbell.set_doorbell_target(0);
+                doorbell.set_doorbell_stream_id(0);
+            });
+        }
+        let event_ring = Arc::clone(&self.event_ring);
+        let registers = Arc::clone(&self.registers);
+        let recieved = CommandCompletionFuture::new(event_ring, registers, trb_ptr).await;
+        log::debug!("recieved: {:?}", &recieved);
+        assert!(recieved.completion_code().unwrap() == event::CompletionCode::Success);
+
+        Ok(())
+    }
+
+    async fn async_assign_address(
+        &mut self,
+        _hub_address: u8,
+        port_index: u8,
+        device_is_low_speed: bool,
+    ) -> Result<(), usb_host::TransferError> {
+        let hub_port_index = self.port_index as u8;
+        let routing = next_route(self.routing, port_index + 1);
+        let speed = if device_is_low_speed { 1 } else { 0 };
+        let _parent_hub_slot_id = self.slot_id() as u8;
+        let _parent_port_index = self.port_index as u8;
+        let init_port_device = InitPortDevice {
+            port_index: hub_port_index,
+            routing,
+            speed,
+            parent_hub_slot_id: None,
+            parent_port_index: None,
+        };
+        {
+            let mut user_event_ring = kernel_lib::lock!(&self.user_event_ring);
+            user_event_ring.push(UserEvent::InitPortDevice(init_port_device))
+        }
+        Ok(())
     }
 
     async fn init_transfer_ring_for_interrupt_at(
@@ -782,19 +899,27 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         let b_request = usb_host::RequestCode::GetDescriptor;
         let w_value = (descriptor_index, descriptor_type as u8).into();
         let w_index = 0;
-        let length = self
-            .async_control_transfer(
-                &mut endpoint_id,
-                bm_request_type,
-                b_request,
-                w_value,
-                w_index,
-                Some(buf),
-            )
-            .await
-            .unwrap();
-        log::debug!("Transferred {} bytes", length);
-        length
+
+        let mut count = 0;
+        loop {
+            let length = self
+                .async_control_transfer(
+                    &mut endpoint_id,
+                    bm_request_type,
+                    b_request,
+                    w_value,
+                    w_index,
+                    Some(buf),
+                )
+                .await;
+            if let Ok(length) = length {
+                break length;
+            }
+            count += 1;
+            if count > 100 {
+                panic!("too many retries: {:?}", length);
+            }
+        }
     }
 }
 
@@ -998,5 +1123,19 @@ impl<M: Mapper + Clone + Send + Sync + Sync + Send> AsyncUSBHost
         _buf: &[u8],
     ) -> Result<usize, usb_host::TransferError> {
         todo!()
+    }
+
+    async fn register_hub(&mut self, address: u8) -> Result<(), usb_host::TransferError> {
+        self.async_register_hub(address).await
+    }
+
+    async fn assign_address(
+        &mut self,
+        hub_address: u8,
+        port_index: u8,
+        device_is_low_speed: bool,
+    ) -> Result<(), usb_host::TransferError> {
+        self.async_assign_address(hub_address, port_index, device_is_low_speed)
+            .await
     }
 }

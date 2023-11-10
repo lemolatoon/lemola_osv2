@@ -1,6 +1,18 @@
 .PHONY: FORCE
 PROFILE=debug
 QEMU=qemu-system-x86_64
+QEMU_ARGS= \
+		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
+		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw,readonly \
+		-drive file=disk.img,format=raw \
+		-device nec-usb-xhci,id=xhci \
+		-device usb-hub,bus=xhci.0,port=4 \
+		-device usb-mouse,bus=xhci.0,port=4.4 \
+		-device usb-kbd,bus=xhci.0,port=4.5 \
+		-serial telnet::5555,server,nowait \
+		-no-reboot \
+		-no-shutdown \
+		-monitor stdio
 
 ifeq ($(PROFILE),release)
 	CARGO_FLAGS=--release
@@ -40,32 +52,15 @@ install: bootloader/target/x86_64-unknown-uefi/$(PROFILE)/bootloader.efi kernel/
 	sudo umount mnt
 
 run: disk.img
-	$(QEMU) \
-		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
-		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw,readonly \
-		-drive file=disk.img,format=raw \
-		-device nec-usb-xhci,id=xhci \
-		-device usb-kbd \
- 		-device usb-mouse \
-		-serial telnet::5555,server,nowait \
-		-no-reboot \
-		-no-shutdown \
-		-monitor stdio
+	$(QEMU) $(QEMU_ARGS)
+# 		-device usb-mouse,bus=xhci.0 
+#		-device usb-kbd,bus=xhci.0 
+#		-device usb-mouse,bus=xhci.0 
 # for serial port
 # telnet localhost 5555
 
 run_gdb: disk.img
-	$(QEMU) \
-		-drive if=pflash,file=ovmf/OVMF_CODE.fd,format=raw \
-		-drive if=pflash,file=ovmf/lemola_os_ovmf_vars.fd,format=raw \
-		-drive file=disk.img,format=raw \
-		-device nec-usb-xhci,id=xhci \
-		-device usb-kbd \
-		-device usb-mouse \
-		-serial telnet::5555,server,nowait \
-		-monitor stdio \
-		-no-reboot \
-		-no-shutdown \
+	$(QEMU) $(QEMU_ARGS) \
 		-gdb tcp::12345 -S
 # on gdb
 # target remote localhost:12345

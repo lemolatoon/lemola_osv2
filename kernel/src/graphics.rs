@@ -266,15 +266,15 @@ impl log::Log for SerialAndVgaCharWriter {
                 )
                 .unwrap();
             } else {
-                // let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
-                // DecoratedLog::write(
-                //     &mut serial_writer,
-                //     record.level(),
-                //     record.args(),
-                //     record.file().unwrap_or("<unknown>"),
-                //     record.line().unwrap_or(0),
-                // )
-                // .unwrap();
+                let mut serial_writer = InstantWriter::new(|s| serial_print!("{}", s));
+                DecoratedLog::write(
+                    &mut serial_writer,
+                    record.level(),
+                    record.args(),
+                    record.file().unwrap_or("<unknown>"),
+                    record.line().unwrap_or(0),
+                )
+                .unwrap();
             }
         }
     }

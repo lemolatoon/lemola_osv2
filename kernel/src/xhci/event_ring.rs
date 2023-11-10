@@ -68,6 +68,7 @@ impl EventRingSegmentTableEntry {
 
 #[derive(Debug)]
 pub struct EventRing<A: Allocator> {
+    #[allow(dead_code)]
     trb_buffer: Box<[trb::Link], A>,
     popped: Vec<event::Allowed>,
     event_ring_segment_table: Box<EventRingSegmentTableEntry, A>,
@@ -166,7 +167,6 @@ impl EventRing<&'static GlobalAllocator> {
         &mut self,
         interrupter: &mut Interrupter<'_, M, ReadWrite>,
     ) -> Result<event::Allowed, TrbRaw> {
-        log::debug!("pop: n_pop: {} / {}", self.n_pop, self.trb_buffer.len());
         self.n_pop += 1;
         let dequeue_pointer = interrupter
             .erdp
@@ -188,7 +188,6 @@ impl EventRing<&'static GlobalAllocator> {
             self.cycle_bit = !self.cycle_bit;
         }
 
-        log::debug!("next dequeue ptr: {:p}", next);
         interrupter.erdp.update_volatile(|erdp| {
             erdp.set_event_ring_dequeue_pointer(next as u64);
             erdp.clear_event_handler_busy();
@@ -342,7 +341,6 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
                 for ptr in ptrs {
                     match &popped_trb {
                         Ok(event::Allowed::TransferEvent(event)) if event.trb_pointer() == *ptr => {
-                            log::debug!("got event: {:?}", event);
                             return Poll::Ready(*event);
                         }
                         Ok(_trb) => {
@@ -369,10 +367,24 @@ impl<M: Mapper + Clone + Send + Sync> Future for TransferEventFuture<M> {
     }
 }
 
-struct CommandCompletionFuture<M: Mapper + Clone + Send + Sync> {
+pub struct CommandCompletionFuture<M: Mapper + Clone + Send + Sync> {
     pub event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
     pub registers: Arc<Mutex<Registers<M>>>,
     pub wait_on: u64, // trb_ptr
+}
+
+impl<M: Mapper + Clone + Send + Sync> CommandCompletionFuture<M> {
+    pub fn new(
+        event_ring: Arc<Mutex<EventRing<&'static GlobalAllocator>>>,
+        registers: Arc<Mutex<Registers<M>>>,
+        wait_on: u64,
+    ) -> Self {
+        Self {
+            event_ring,
+            registers,
+            wait_on,
+        }
+    }
 }
 
 impl<M: Mapper + Clone + Send + Sync> Future for CommandCompletionFuture<M> {

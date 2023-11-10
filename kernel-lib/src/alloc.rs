@@ -125,6 +125,22 @@ pub fn alloc_with_boundary<const SIZE: usize, T>(
 ) -> Result<Box<MaybeUninit<T>, &'_ FixedLengthAllocator<SIZE>>, LayoutError> {
     let layout = Layout::from_size_align(core::mem::size_of::<T>(), alignment)?;
     let ptr = alloc_with_boundary_raw(allocator, layout, boundary) as *mut MaybeUninit<T>;
+    log::debug!("allocating {:x}", ptr as usize);
+    let (until, heap_start, heap_end) = {
+        let allocator = crate::lock!(allocator.0);
+        (
+            allocator.next,
+            allocator.heap.as_ptr() as usize,
+            allocator.heap.as_ptr() as usize + SIZE,
+        )
+    };
+    log::debug!(
+        "[{:x}..{:x}] in [{:x}...{:x}]",
+        ptr as usize,
+        until,
+        heap_start,
+        heap_end
+    );
     debug_assert!(!ptr.is_null());
     Ok(unsafe { Box::from_raw_in(ptr, allocator) })
 }

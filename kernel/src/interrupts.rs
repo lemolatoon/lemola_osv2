@@ -26,7 +26,6 @@ fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_
     //     }
     //     log::info!("end xhci interrupt handler called");
     // });
-    log::debug!("xhci interrupt handler called, but ignored...");
 
     write_local_apic_id(0xb0, 0);
 }

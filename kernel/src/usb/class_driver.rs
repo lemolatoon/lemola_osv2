@@ -1,4 +1,5 @@
 pub mod callbacks;
+pub mod hub;
 pub mod keyboard;
 pub mod mouse;
 
@@ -12,6 +13,7 @@ use usb_host::{
 };
 use usb_host::{Endpoint as EndpointTrait, USBHost};
 
+use self::hub::HubDriver;
 use self::keyboard::BootKeyboardDriver;
 use self::mouse::MouseDriver;
 
@@ -749,6 +751,7 @@ unsafe fn to_slice_mut<T>(v: &mut T) -> &mut [u8] {
     core::slice::from_raw_parts_mut(ptr, len)
 }
 
+#[derive(Debug)]
 pub struct Endpoint {
     address: u8,
     endpoint_num: u8,
@@ -829,9 +832,9 @@ macro_rules! add_device {
             addr: u8,
         ) -> Result<(), DriverError> {
             let mut device = self.$device.lock(file!(), line!());
-            if Driver::want_device(&device.driver, &device_descriptor) {
+            if AsyncDriver::want_device(&device.driver, &device_descriptor) {
                 device.slot_id = Some(slot_id);
-                return Driver::add_device(&mut device.driver, device_descriptor, addr);
+                return AsyncDriver::add_device(&mut device.driver, device_descriptor, addr);
             }
 
             Err(DriverError::Permanent(addr, $err))
@@ -867,6 +870,7 @@ pub struct DriverInfo<T: AsyncDriver> {
 pub enum DriverKind {
     Mouse,
     Keyboard,
+    Hub,
 }
 
 #[derive(Debug)]
@@ -877,6 +881,7 @@ where
 {
     mouse: Mutex<DriverInfo<MouseDriver<MF>>>,
     keyboard: Mutex<DriverInfo<BootKeyboardDriver<KF>>>,
+    hub: Mutex<DriverInfo<HubDriver>>,
 }
 
 impl<MF, KF> ClassDriverManager<MF, KF>
@@ -895,7 +900,17 @@ where
             driver: BootKeyboardDriver::new_boot_keyboard(keyboard_callback),
         };
         let keyboard = Mutex::new(keyboard);
-        Self { mouse, keyboard }
+
+        let hub = DriverInfo {
+            slot_id: None,
+            driver: HubDriver::new(),
+        };
+        let hub = Mutex::new(hub);
+        Self {
+            mouse,
+            keyboard,
+            hub,
+        }
     }
 
     // pub fn tick<'a>(
@@ -947,7 +962,13 @@ where
         &self.keyboard
     }
 
+    pub fn hub(&self) -> &Mutex<DriverInfo<HubDriver>> {
+        &self.hub
+    }
+
     add_device!(add_mouse_device, mouse, "Mouse device not wanted");
 
     add_device!(add_keyboard_device, keyboard, "Keyboard device not wanted");
+
+    add_device!(add_hub_device, hub, "Hub device not wanted");
 }

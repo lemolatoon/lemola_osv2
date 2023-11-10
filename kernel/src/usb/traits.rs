@@ -26,6 +26,15 @@ pub trait AsyncUSBHost {
         ep: &mut (dyn usb_host::Endpoint + Send + Sync),
         buf: &[u8],
     ) -> Result<usize, usb_host::TransferError>;
+
+    async fn register_hub(&mut self, hub_address: u8) -> Result<(), usb_host::TransferError>;
+
+    async fn assign_address(
+        &mut self,
+        hub_address: u8,
+        port_index: u8,
+        device_is_low_speed: bool,
+    ) -> Result<(), usb_host::TransferError>;
 }
 
 pub trait AsyncDriver {

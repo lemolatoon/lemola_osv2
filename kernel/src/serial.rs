@@ -28,9 +28,11 @@ fn write_serial(byte: u8) {
 }
 
 pub fn write_serial_str(string: &str) {
-    for byte in string.bytes() {
-        write_serial(byte);
-    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        for byte in string.bytes() {
+            write_serial(byte);
+        }
+    });
 }
 
 static mut SERIAL_WRITER: SerialWriter = SerialWriter::new();
