@@ -599,8 +599,8 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
         let hub_port_index = self.port_index as u8;
         let routing = next_route(self.routing, port_index + 1);
         let speed = if device_is_low_speed { 1 } else { 0 };
-        let parent_hub_slot_id = self.slot_id() as u8;
-        let parent_port_index = self.port_index as u8;
+        let _parent_hub_slot_id = self.slot_id() as u8;
+        let _parent_port_index = self.port_index as u8;
         let init_port_device = InitPortDevice {
             port_index: hub_port_index,
             routing,
