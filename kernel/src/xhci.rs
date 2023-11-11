@@ -1,8 +1,7 @@
 extern crate alloc;
 use core::ffi::c_void;
 
-use alloc::sync::Arc;
-use kernel_lib::{futures::yield_pending, layer::LayerManager, mutex::Mutex};
+use kernel_lib::futures::yield_pending;
 
 use crate::{
     alloc::alloc::GlobalAllocator, interrupts::InterruptVector, memory::MemoryMapper, pci,

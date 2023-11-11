@@ -2,15 +2,14 @@ extern crate alloc;
 use core::sync::atomic::AtomicBool;
 
 use alloc::collections::VecDeque;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use kernel_lib::futures::yield_pending;
-use kernel_lib::layer::{LayerManager, Position, Window};
+use kernel_lib::layer::{Position, Window};
 use kernel_lib::mutex::Mutex;
 use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
 
-use crate::graphics::{get_pixcel_writer, LAYER_MANGER};
+use crate::graphics::LAYER_MANGER;
 
 pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
 

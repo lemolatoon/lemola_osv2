@@ -4,12 +4,11 @@
 use core::{arch::asm, panic::PanicInfo};
 
 pub extern crate alloc;
-use alloc::sync::Arc;
 use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
     alloc::alloc::GlobalAllocator,
-    graphics::{init_graphics, init_logger, LAYER_MANGER},
+    graphics::{init_graphics, init_logger},
     interrupts::init_idt,
     memory::MemoryMapper,
     multitasking::{
@@ -23,9 +22,7 @@ use kernel::{
     },
     xhci::init_xhci_controller,
 };
-use kernel_lib::{
-    layer::LayerManager, mutex::Mutex, render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color,
-};
+use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
