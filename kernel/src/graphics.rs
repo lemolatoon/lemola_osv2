@@ -1,6 +1,7 @@
 use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
+use kernel_lib::layer::LayerManager;
 use kernel_lib::mutex::Mutex;
 use kernel_lib::{
     logger::{CharWriter, DecoratedLog},
@@ -220,6 +221,10 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
         let writer = Writer::new(pixcel_writer);
         writer
     });
+    kernel_lib::lock!(LAYER_MANGER).get_or_init(|| {
+        let layer_manager = LayerManager::new(pixcel_writer);
+        layer_manager
+    });
     pixcel_writer
 }
 
@@ -331,3 +336,5 @@ pub fn _print_and_flush(args: fmt::Arguments) {
         writer.flush();
     });
 }
+
+pub static LAYER_MANGER: Mutex<OnceCell<LayerManager<'static>>> = Mutex::new(OnceCell::new());

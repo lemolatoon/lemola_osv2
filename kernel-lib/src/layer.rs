@@ -21,16 +21,21 @@ impl Position {
 }
 
 pub struct Window {
-    transparent_color: Color,
+    transparent_color: Option<Color>,
     pixels: Vec<Vec<Color>>,
     position: Position,
 }
 
 impl Window {
-    pub fn new(width: usize, height: usize, transparent_color: Color, position: Position) -> Self {
-        let mut pixels = Vec::with_capacity(height);
+    pub fn new(
+        width: usize,
+        height: usize,
+        transparent_color: Option<Color>,
+        position: Position,
+    ) -> Self {
+        let mut pixels = Vec::with_capacity(width);
         for _ in 0..height {
-            pixels.push(vec![transparent_color; width]);
+            pixels.push(vec![transparent_color.unwrap_or(Color::black()); height]);
         }
         Self {
             transparent_color,
@@ -69,8 +74,8 @@ impl Window {
                     writer.pixcels_per_scan_line(),
                 )
             {
-                let color = self.pixels[x][y];
-                if color == self.transparent_color {
+                let color = self.pixels[x - self.position.x][y - self.position.y];
+                if Some(color) == self.transparent_color {
                     continue;
                 }
 
@@ -118,16 +123,11 @@ pub struct LayerManager<'a> {
 
 impl<'a> LayerManager<'a> {
     pub fn new(writer: &'a (dyn AsciiWriter + Send + Sync)) -> Self {
-        // let underlying_layer = Layer::new(Window::new(
-        //     writer.horizontal_resolution(),
-        //     writer.vertical_resolution(),
-        //     Color::black(),
-        //     Position::new(0, 0),
-        // ));
+        let layers = BTreeMap::new();
         Self {
             writer,
             layer_stack: VecDeque::new(),
-            layers: BTreeMap::new(),
+            layers,
         }
     }
     pub fn new_layer(&mut self, window: Window) -> LayerId {
@@ -157,6 +157,12 @@ impl<'a> LayerManager<'a> {
     }
 
     pub fn flush(&self) {
+        for y in 0..self.writer.vertical_resolution() {
+            for x in 0..self.writer.horizontal_resolution() {
+                self.writer.write(x, y, Color::black());
+            }
+        }
+
         for layer_id in self.layer_stack.iter() {
             let layer = self.layers.get(layer_id).unwrap();
             layer.window.flush(self.writer);

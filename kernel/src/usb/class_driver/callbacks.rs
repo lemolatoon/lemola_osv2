@@ -1,15 +1,22 @@
+use core::cell::OnceCell;
+
 use kernel_lib::{
-    render::{AtomicVec2D, Vector2D},
-    shapes::mouse::MOUSE_CURSOR_SHAPE,
+    layer::{LayerId, Position, Window},
+    mutex::Mutex,
+    render::{AtomicVec2D, RendererMut, Vector2D},
+    shapes::{
+        mouse::{MouseCursorPixel, MOUSE_CURSOR_SHAPE},
+        Shape,
+    },
 };
 
 use crate::{
-    graphics::get_pixcel_writer,
+    graphics::LAYER_MANGER,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
 };
 
-static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(700, 500);
+static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(0, 0);
 
 pub type CallbackType = fn(u8, &[u8]);
 
@@ -21,6 +28,30 @@ pub const fn mouse() -> CallbackType {
     _mouse
 }
 
+pub fn init_mouse_cursor_layer() -> LayerId {
+    let window = Window::new(
+        MOUSE_CURSOR_SHAPE.get_width(),
+        MOUSE_CURSOR_SHAPE.get_height(),
+        Some(MouseCursorPixel::BackGround.into()),
+        Position::new(0, 0),
+    );
+    let id = {
+        let mut mgr = kernel_lib::lock!(LAYER_MANGER);
+        let mgr = mgr.get_mut().unwrap();
+        let id = mgr.new_layer(window);
+        let vec = MOUSE_CURSOR.into_vec();
+        mgr.move_relative(id, vec.0 as usize, vec.1 as usize);
+        let layer = mgr.layer_mut(id).unwrap();
+        layer.fill_shape(Vector2D::new(0, 0), &MOUSE_CURSOR_SHAPE);
+
+        id
+    };
+
+    *kernel_lib::lock!(MOUSE_LAYER_ID).get_or_init(|| id)
+}
+
+static MOUSE_LAYER_ID: Mutex<OnceCell<LayerId>> = Mutex::new(OnceCell::new());
+
 #[doc(hidden)]
 pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
@@ -31,30 +62,23 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
     if left_click {
         let pos = MOUSE_CURSOR.into_vec();
         let pos = Vector2D::new(pos.0 as usize, pos.1 as usize);
+        log::debug!("frame buffer pos: {:?}", pos);
         if let Some(pos) = frame_buffer_position_to_board_position(pos) {
             let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
+            log::debug!("click_pos: {:?}", pos);
             queue.push_back(pos);
         }
     }
 
     MOUSE_CURSOR.add(x_diff as isize, y_diff as isize);
-    if let Some(pixcel_writer) = get_pixcel_writer() {
-        let (mut x, mut y) = MOUSE_CURSOR.into_vec();
-        use core::cmp::{max, min};
-        x = min(
-            max(x, 0),
-            pixcel_writer.horizontal_resolution() as isize - 1,
+    kernel_lib::lock!(LAYER_MANGER)
+        .get_mut()
+        .unwrap()
+        .move_relative(
+            *kernel_lib::lock!(MOUSE_LAYER_ID).get().unwrap(),
+            x_diff as usize,
+            y_diff as usize,
         );
-        y = min(max(y, 0), pixcel_writer.vertical_resolution() as isize - 1);
-        let vec = Vector2D::new(x as usize, y as usize);
-        log::debug!(
-            "rendering: {:?} in [{}, {}]",
-            vec,
-            pixcel_writer.horizontal_resolution(),
-            pixcel_writer.vertical_resolution()
-        );
-        pixcel_writer.fill_shape(vec, &MOUSE_CURSOR_SHAPE);
-    };
 }
 
 #[doc(hidden)]

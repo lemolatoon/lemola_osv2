@@ -9,7 +9,7 @@ use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
     alloc::alloc::GlobalAllocator,
-    graphics::{init_graphics, init_logger},
+    graphics::{init_graphics, init_logger, LAYER_MANGER},
     interrupts::init_idt,
     memory::MemoryMapper,
     multitasking::{
@@ -17,7 +17,10 @@ use kernel::{
         task::{Priority, Task},
     },
     println, serial_println,
-    usb::{class_driver::callbacks, device::DeviceContextInfo},
+    usb::{
+        class_driver::callbacks::{self, init_mouse_cursor_layer},
+        device::DeviceContextInfo,
+    },
     xhci::init_xhci_controller,
 };
 use kernel_lib::{
@@ -52,6 +55,7 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
         callbacks::mouse(),
         callbacks::keyboard(),
     );
+    init_mouse_cursor_layer();
     let class_drivers: &'static _ = unsafe { &*(&class_drivers as *const _) };
     let controller = init_xhci_controller(class_drivers);
     init_idt();
@@ -64,15 +68,10 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     // x86_64::instructions::interrupts::enable();
 
-    let layer_manager = Arc::new(Mutex::new(LayerManager::new(pixcel_writer)));
-
     let mut executor = Executor::new();
     let controller: &'static _ = unsafe { &*(&controller as *const _) };
     let polling_task = Task::new(Priority::Default, kernel::xhci::poll_forever(controller));
-    let lifegame_task = Task::new(
-        Priority::Default,
-        kernel::lifegame::do_lifegame(Arc::clone(&layer_manager)),
-    );
+    let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
 

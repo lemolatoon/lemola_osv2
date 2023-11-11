@@ -10,7 +10,7 @@ use kernel_lib::mutex::Mutex;
 use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
 
-use crate::graphics::get_pixcel_writer;
+use crate::graphics::{get_pixcel_writer, LAYER_MANGER};
 
 pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
 
@@ -39,14 +39,17 @@ pub fn frame_buffer_position_to_board_position(
     Some((x, y))
 }
 
-pub async fn do_lifegame(layer_manager: Arc<Mutex<LayerManager<'static>>>) {
+pub async fn do_lifegame() {
     let window = Window::new(
         SIZE * PIXCEL_SIZE,
         SIZE * PIXCEL_SIZE,
-        Color::black(),
+        Some(Color::black()),
         Position::new(0, 0),
     );
-    let id = kernel_lib::lock!(layer_manager).new_layer(window);
+    let id = kernel_lib::lock!(LAYER_MANGER)
+        .get_mut()
+        .unwrap()
+        .new_layer(window);
     // let pixcel_writer = get_pixcel_writer().unwrap();
     let board: [[u8; SIZE]; SIZE] = [
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -83,7 +86,9 @@ pub async fn do_lifegame(layer_manager: Arc<Mutex<LayerManager<'static>>>) {
                     board[y][x] = true;
                 }
                 if !is_empty {
-                    kernel_lib::lock!(layer_manager)
+                    kernel_lib::lock!(LAYER_MANGER)
+                        .get_mut()
+                        .unwrap()
                         .layer_mut(id)
                         .unwrap()
                         .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
@@ -91,13 +96,15 @@ pub async fn do_lifegame(layer_manager: Arc<Mutex<LayerManager<'static>>>) {
             }
             yield_pending().await;
         }
-        kernel_lib::lock!(layer_manager).flush();
+        kernel_lib::lock!(LAYER_MANGER).get().unwrap().flush();
         yield_pending().await;
         // log::info!("RUNNING: {}", RUNNING.load(core::sync::atomic::Ordering::SeqCst));
         if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
             process::<SIZE>(&mut board);
         }
-        kernel_lib::lock!(layer_manager)
+        kernel_lib::lock!(LAYER_MANGER)
+            .get_mut()
+            .unwrap()
             .layer_mut(id)
             .unwrap()
             .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
@@ -106,7 +113,6 @@ pub async fn do_lifegame(layer_manager: Arc<Mutex<LayerManager<'static>>>) {
 }
 
 fn process<const SIZE: usize>(board: &mut [Vec<bool>]) {
-    log::debug!("processing...");
     let mut next_board = [[false; SIZE]; SIZE];
     for i in 0..SIZE {
         for j in 0..SIZE {
