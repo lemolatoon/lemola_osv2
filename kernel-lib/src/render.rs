@@ -3,7 +3,7 @@ use core::ops::{Add, AddAssign};
 
 use alloc::vec::Vec;
 
-use crate::{shapes::Shape, Color, PixcelWritable};
+use crate::{shapes::Shape, Color, PixcelWritable, PixcelWritableMut};
 
 #[derive(Debug)]
 pub struct AtomicVec2D {
@@ -113,4 +113,58 @@ pub trait Renderer: PixcelWritable {
     }
 }
 
+pub trait RendererMut: PixcelWritableMut {
+    fn fill_rect(&mut self, pos: Vector2D, size: Vector2D, color: Color) {
+        for y in pos.y..pos.y + size.y {
+            for x in pos.x..pos.x + size.x {
+                self.write(x, y, color);
+            }
+        }
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    fn render_board(&mut self, board: &Vec<Vec<bool>>, pos: Vector2D, size: usize, color: Color) {
+        let len = board.len();
+        for y in 0..len {
+            for x in 0..len {
+                let block_pos = Vector2D::new(pos.x + x * size, pos.y + y * size);
+                if board[y][x] {
+                    self.fill_rect(
+                        Vector2D::new(block_pos.x + 1, block_pos.y + 1),
+                        Vector2D::new(size - 1, size - 1),
+                        color,
+                    );
+                } else {
+                    self.fill_rect(
+                        Vector2D::new(block_pos.x + 1, block_pos.y + 1),
+                        Vector2D::new(size - 1, size - 1),
+                        Color::black(),
+                    );
+                }
+                self.draw_rect_outline(block_pos, Vector2D::new(size, size), Color::white());
+            }
+        }
+    }
+
+    fn draw_rect_outline(&mut self, pos: Vector2D, size: Vector2D, color: Color) {
+        for x in pos.x..pos.x + size.x {
+            self.write(x, pos.y, color);
+            self.write(x, pos.y + size.y - 1, color);
+        }
+        for y in pos.y..pos.y + size.y {
+            self.write(pos.x, y, color);
+            self.write(pos.x + size.x - 1, y, color);
+        }
+    }
+
+    fn fill_shape(&mut self, pos: Vector2D, shape: &dyn Shape) {
+        for y in 0..shape.get_height() {
+            for x in 0..shape.get_width() {
+                self.write(pos.x + x, pos.y + y, shape.get_pixel(x, y));
+            }
+        }
+    }
+}
+
 impl<T> Renderer for T where T: PixcelWritable {}
+impl<T> RendererMut for T where T: PixcelWritableMut {}

@@ -5,6 +5,7 @@
 
 pub mod alloc;
 pub mod futures;
+pub mod layer;
 pub mod logger;
 pub mod mutex;
 pub mod render;
@@ -56,6 +57,15 @@ pub trait PixcelInfo {
 
 pub trait PixcelWritable {
     fn write(&self, x: usize, y: usize, color: Color);
+}
+
+pub trait PixcelWritableMut {
+    fn write(&mut self, x: usize, y: usize, color: Color);
+}
+impl<T: PixcelWritable> PixcelWritableMut for T {
+    fn write(&mut self, x: usize, y: usize, color: Color) {
+        PixcelWritable::write(self, x, y, color)
+    }
 }
 
 pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {

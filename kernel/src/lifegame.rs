@@ -2,10 +2,12 @@ extern crate alloc;
 use core::sync::atomic::AtomicBool;
 
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use kernel_lib::futures::yield_pending;
+use kernel_lib::layer::{LayerManager, Position, Window};
 use kernel_lib::mutex::Mutex;
-use kernel_lib::render::Vector2D;
+use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
 
 use crate::graphics::get_pixcel_writer;
@@ -37,8 +39,15 @@ pub fn frame_buffer_position_to_board_position(
     Some((x, y))
 }
 
-pub async fn do_lifegame() {
-    let pixcel_writer = get_pixcel_writer().unwrap();
+pub async fn do_lifegame(layer_manager: Arc<Mutex<LayerManager<'static>>>) {
+    let window = Window::new(
+        SIZE * PIXCEL_SIZE,
+        SIZE * PIXCEL_SIZE,
+        Color::black(),
+        Position::new(0, 0),
+    );
+    let id = kernel_lib::lock!(layer_manager).new_layer(window);
+    // let pixcel_writer = get_pixcel_writer().unwrap();
     let board: [[u8; SIZE]; SIZE] = [
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -74,21 +83,30 @@ pub async fn do_lifegame() {
                     board[y][x] = true;
                 }
                 if !is_empty {
-                    pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+                    kernel_lib::lock!(layer_manager)
+                        .layer_mut(id)
+                        .unwrap()
+                        .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
                 }
             }
             yield_pending().await;
         }
+        kernel_lib::lock!(layer_manager).flush();
+        yield_pending().await;
         // log::info!("RUNNING: {}", RUNNING.load(core::sync::atomic::Ordering::SeqCst));
         if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
             process::<SIZE>(&mut board);
         }
-        pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+        kernel_lib::lock!(layer_manager)
+            .layer_mut(id)
+            .unwrap()
+            .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
         yield_pending().await;
     }
 }
 
 fn process<const SIZE: usize>(board: &mut [Vec<bool>]) {
+    log::debug!("processing...");
     let mut next_board = [[false; SIZE]; SIZE];
     for i in 0..SIZE {
         for j in 0..SIZE {

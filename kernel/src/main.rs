@@ -4,6 +4,7 @@
 use core::{arch::asm, panic::PanicInfo};
 
 pub extern crate alloc;
+use alloc::sync::Arc;
 use common::types::KernelMainArg;
 use core::fmt::Write;
 use kernel::{
@@ -19,7 +20,9 @@ use kernel::{
     usb::{class_driver::callbacks, device::DeviceContextInfo},
     xhci::init_xhci_controller,
 };
-use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
+use kernel_lib::{
+    layer::LayerManager, mutex::Mutex, render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color,
+};
 
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
@@ -61,10 +64,15 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
 
     // x86_64::instructions::interrupts::enable();
 
+    let layer_manager = Arc::new(Mutex::new(LayerManager::new(pixcel_writer)));
+
     let mut executor = Executor::new();
     let controller: &'static _ = unsafe { &*(&controller as *const _) };
     let polling_task = Task::new(Priority::Default, kernel::xhci::poll_forever(controller));
-    let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
+    let lifegame_task = Task::new(
+        Priority::Default,
+        kernel::lifegame::do_lifegame(Arc::clone(&layer_manager)),
+    );
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
 
