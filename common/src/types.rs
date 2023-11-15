@@ -21,10 +21,10 @@ pub struct MemMapIter<'a> {
 }
 
 impl MemMapEntry {
-    pub unsafe fn new_inplace<'a>(
-        entry: &mut [u8],
+    pub unsafe fn new_inplace<'a, 'b>(
+        entry: &'a mut [u8],
         size: u64,
-        iter: impl ExactSizeIterator<Item = &'a MemoryDescriptor> + Clone,
+        iter: impl ExactSizeIterator<Item = &'b MemoryDescriptor> + Clone,
     ) {
         let header = entry.as_mut_ptr() as *mut MemMapEntry;
         (*header).size = size;
