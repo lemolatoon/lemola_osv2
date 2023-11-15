@@ -1,7 +1,10 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 #![feature(lang_items)]
-use core::{arch::asm, panic::PanicInfo};
+use core::{
+    arch::{asm, global_asm},
+    panic::PanicInfo,
+};
 
 pub extern crate alloc;
 use common::types::KernelMainArg;
@@ -24,12 +27,26 @@ use kernel::{
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
+const STACK_SIZE: usize = 1024 * 1024;
 #[repr(align(16))]
-struct KernelStack([u8; 4096]);
-static KERNEL_STACK: KernelStack = KernelStack([0; 4096]);
+pub struct KernelStack([u8; STACK_SIZE]);
+#[no_mangle]
+static mut KERNEL_STACK: KernelStack = KernelStack([0; STACK_SIZE]);
+global_asm!(
+    r#"
+.global kernel_main
+kernel_main:
+    jmp kernel_main2
+    mov rsp, KERNEL_STACK + 1024 * 1024
+    jmp kernel_main2
+.fin:
+    hlt
+    jmp .fin
+"#
+);
 
 #[no_mangle]
-extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
+extern "C" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     serial_println!("Hello lemola os!!! from serial");
     let arg = unsafe { (*arg).clone() };
     let graphics_info = arg.graphics_info;
