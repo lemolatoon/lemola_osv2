@@ -1,8 +1,5 @@
-use core::cell::OnceCell;
-
 use kernel_lib::{
     layer::{LayerId, Position, Window},
-    mutex::Mutex,
     render::{AtomicVec2D, RendererMut, Vector2D},
     shapes::{
         mouse::{MouseCursorPixel, MOUSE_CURSOR_SHAPE},
@@ -11,7 +8,6 @@ use kernel_lib::{
 };
 
 use crate::{
-    graphics::LAYER_MANGER,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
 };
@@ -28,7 +24,8 @@ pub const fn mouse() -> CallbackType {
     _mouse
 }
 
-pub fn init_mouse_cursor_layer() -> LayerId {
+/// This function must be called before any other functions that use MOUSE_LAYER_ID.
+pub unsafe fn init_mouse_cursor_layer() -> LayerId {
     let window = Window::new(
         MOUSE_CURSOR_SHAPE.get_width(),
         MOUSE_CURSOR_SHAPE.get_height(),
@@ -36,7 +33,7 @@ pub fn init_mouse_cursor_layer() -> LayerId {
         Position::new(0, 0),
     );
     let id = {
-        let mut mgr = kernel_lib::lock!(LAYER_MANGER);
+        let mut mgr = crate::lock_layer_manager_raw!();
         let mgr = mgr.get_mut().unwrap();
         let id = mgr.new_layer(window);
         let vec = MOUSE_CURSOR.into_vec();
@@ -47,10 +44,18 @@ pub fn init_mouse_cursor_layer() -> LayerId {
         id
     };
 
-    *kernel_lib::lock!(MOUSE_LAYER_ID).get_or_init(|| id)
+    // Safety: This function assumed to be called before any other functions that use MOUSE_LAYER_ID.
+    unsafe {
+        MOUSE_LAYER_ID = id;
+    };
+    id
 }
 
-static MOUSE_LAYER_ID: Mutex<OnceCell<LayerId>> = Mutex::new(OnceCell::new());
+static mut MOUSE_LAYER_ID: LayerId = LayerId::uninitialized();
+fn mouse_layer_id() -> LayerId {
+    // Safety: MOUSE_LAYER_ID is initialized by init_mouse_cursor_layer.
+    unsafe { MOUSE_LAYER_ID }
+}
 
 #[doc(hidden)]
 pub fn _mouse(_address: u8, buf: &[u8]) {
@@ -71,14 +76,13 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
     }
 
     MOUSE_CURSOR.add(x_diff as isize, y_diff as isize);
-    kernel_lib::lock!(LAYER_MANGER)
-        .get_mut()
-        .unwrap()
-        .move_relative(
-            *kernel_lib::lock!(MOUSE_LAYER_ID).get().unwrap(),
+    {
+        crate::lock_layer_manager_mut!().move_relative(
+            mouse_layer_id(),
             x_diff as usize,
             y_diff as usize,
         );
+    }
 }
 
 #[doc(hidden)]

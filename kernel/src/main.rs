@@ -24,6 +24,10 @@ use kernel::{
 };
 use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
 
+#[repr(align(16))]
+struct KernelStack([u8; 4096]);
+static KERNEL_STACK: KernelStack = KernelStack([0; 4096]);
+
 #[no_mangle]
 extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
     serial_println!("Hello lemola os!!! from serial");
@@ -52,7 +56,9 @@ extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
         callbacks::mouse(),
         callbacks::keyboard(),
     );
-    init_mouse_cursor_layer();
+    unsafe {
+        init_mouse_cursor_layer();
+    }
     let class_drivers: &'static _ = unsafe { &*(&class_drivers as *const _) };
     let controller = init_xhci_controller(class_drivers);
     init_idt();

@@ -338,3 +338,28 @@ pub fn _print_and_flush(args: fmt::Arguments) {
 }
 
 pub static LAYER_MANGER: Mutex<OnceCell<LayerManager<'static>>> = Mutex::new(OnceCell::new());
+
+#[macro_export]
+macro_rules! lock_layer_manager {
+    () => {
+        kernel_lib::lock!(crate::graphics::LAYER_MANGER)
+            .get()
+            .unwrap()
+    };
+}
+
+#[macro_export]
+macro_rules! lock_layer_manager_mut {
+    () => {
+        kernel_lib::lock!(crate::graphics::LAYER_MANGER)
+            .get_mut()
+            .unwrap()
+    };
+}
+
+#[macro_export]
+macro_rules! lock_layer_manager_raw {
+    () => {
+        kernel_lib::lock!(crate::graphics::LAYER_MANGER)
+    };
+}

@@ -9,7 +9,7 @@ use kernel_lib::mutex::Mutex;
 use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
 
-use crate::graphics::LAYER_MANGER;
+use crate::lock_layer_manager_mut;
 
 pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
 
@@ -45,10 +45,7 @@ pub async fn do_lifegame() {
         Some(Color::black()),
         Position::new(0, 0),
     );
-    let id = kernel_lib::lock!(LAYER_MANGER)
-        .get_mut()
-        .unwrap()
-        .new_layer(window);
+    let id = { crate::lock_layer_manager_mut!().new_layer(window) };
     // let pixcel_writer = get_pixcel_writer().unwrap();
     let board: [[u8; SIZE]; SIZE] = [
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -85,9 +82,7 @@ pub async fn do_lifegame() {
                     board[y][x] = true;
                 }
                 if !is_empty {
-                    kernel_lib::lock!(LAYER_MANGER)
-                        .get_mut()
-                        .unwrap()
+                    crate::lock_layer_manager_mut!()
                         .layer_mut(id)
                         .unwrap()
                         .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
@@ -95,18 +90,20 @@ pub async fn do_lifegame() {
             }
             yield_pending().await;
         }
-        kernel_lib::lock!(LAYER_MANGER).get().unwrap().flush();
+        {
+            crate::lock_layer_manager!().flush();
+        }
         yield_pending().await;
         // log::info!("RUNNING: {}", RUNNING.load(core::sync::atomic::Ordering::SeqCst));
         if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
             process::<SIZE>(&mut board);
         }
-        kernel_lib::lock!(LAYER_MANGER)
-            .get_mut()
-            .unwrap()
-            .layer_mut(id)
-            .unwrap()
-            .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+        {
+            lock_layer_manager_mut!()
+                .layer_mut(id)
+                .unwrap()
+                .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+        }
         yield_pending().await;
     }
 }

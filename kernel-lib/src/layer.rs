@@ -92,6 +92,12 @@ impl Window {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LayerId(usize);
 
+impl LayerId {
+    pub const fn uninitialized() -> Self {
+        Self(usize::MAX)
+    }
+}
+
 pub struct Layer {
     id: LayerId,
     window: Window,
