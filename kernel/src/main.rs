@@ -49,6 +49,7 @@ kernel_main:
 extern "C" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     serial_println!("Hello lemola os!!! from serial");
     let arg = unsafe { (*arg).clone() };
+    let memory_map_iter = unsafe { arg.memory_map_entry.as_ref().unwrap().into_iter() };
     let graphics_info = arg.graphics_info;
     let pixcel_writer = init_graphics(graphics_info);
     pixcel_writer.fill_rect(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white());
@@ -62,6 +63,10 @@ extern "C" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     .unwrap();
 
     init_logger();
+
+    for (i, desc) in memory_map_iter.enumerate() {
+        serial_println!("memory map entry {}: {:?}", i, desc);
+    }
 
     log::info!("global logger initialized!");
 
