@@ -1,7 +1,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use core::{alloc::LayoutError, mem::MaybeUninit};
-use kernel_lib::alloc::FixedLengthAllocator;
+use kernel_lib::allocator::FixedLengthAllocator;
 
 const HEAP_SIZE: usize = 1 << 21;
 
@@ -14,7 +14,9 @@ pub fn alloc_with_boundary<T>(
     alignment: usize,
     boundary: usize,
 ) -> Result<Box<MaybeUninit<T>, &'static GlobalAllocator>, LayoutError> {
-    kernel_lib::alloc::alloc_with_boundary(&ALLOCATOR, alignment, boundary)
+    kernel_lib::allocator::fixed_length_allocator::alloc_with_boundary(
+        &ALLOCATOR, alignment, boundary,
+    )
 }
 
 pub fn alloc_with_boundary_with_default_else<T>(
@@ -22,7 +24,7 @@ pub fn alloc_with_boundary_with_default_else<T>(
     boundary: usize,
     default: impl FnOnce() -> T,
 ) -> Result<Box<T, &'static GlobalAllocator>, LayoutError> {
-    kernel_lib::alloc::alloc_with_boundary_with_default_else(
+    kernel_lib::allocator::fixed_length_allocator::alloc_with_boundary_with_default_else(
         &ALLOCATOR, alignment, boundary, default,
     )
 }
@@ -32,7 +34,9 @@ pub fn alloc_array_with_boundary<T>(
     alignment: usize,
     boundary: usize,
 ) -> Result<Box<[MaybeUninit<T>], &'static GlobalAllocator>, LayoutError> {
-    kernel_lib::alloc::alloc_array_with_boundary(&ALLOCATOR, len, alignment, boundary)
+    kernel_lib::allocator::fixed_length_allocator::alloc_array_with_boundary(
+        &ALLOCATOR, len, alignment, boundary,
+    )
 }
 
 pub fn alloc_array_with_boundary_with_default_else<T>(
@@ -41,7 +45,7 @@ pub fn alloc_array_with_boundary_with_default_else<T>(
     boundary: usize,
     default: impl Fn() -> T,
 ) -> Result<Box<[T], &'static GlobalAllocator>, LayoutError> {
-    kernel_lib::alloc::alloc_array_with_boundary_with_default_else(
+    kernel_lib::allocator::fixed_length_allocator::alloc_array_with_boundary_with_default_else(
         &ALLOCATOR, len, alignment, boundary, default,
     )
 }

@@ -3,7 +3,7 @@
 #![feature(allocator_api)]
 #![feature(generic_arg_infer)]
 
-pub mod alloc;
+pub mod allocator;
 pub mod futures;
 pub mod layer;
 pub mod logger;
