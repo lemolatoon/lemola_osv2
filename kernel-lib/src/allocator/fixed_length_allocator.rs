@@ -94,6 +94,8 @@ unsafe impl<const SIZE: usize> GlobalAlloc for FixedLengthAllocator<SIZE> {
 
 #[cfg(test)]
 mod tests {
+    use crate::allocator;
+
     use super::*;
 
     #[test]
@@ -174,56 +176,8 @@ mod tests {
 
     #[test]
     fn alloc_huge_times() {
-        use rand::Rng;
         const SIZE: usize = 100 * 1024;
         let allocator = FixedLengthAllocator::<SIZE>::new();
-        let mut rng = rand::thread_rng();
-        for _ in 0..(SIZE / 1024) {
-            let alignment: usize = rng.gen_range(0..1000);
-            // alignment must be power of 2
-            let alignment = 2i32.pow(alignment.ilog2()) as usize;
-            let size = rng.gen_range(0..1000);
-            let mut boundary: usize;
-            if rng.gen_bool(0.99) {
-                boundary = rng.gen_range(size..1000);
-                // boundary must be power of 2
-                boundary = 2i32.pow(boundary.ilog2()) as usize;
-                if boundary < size {
-                    boundary *= 2;
-                }
-            } else {
-                boundary = 0;
-            }
-            let ptr = unsafe {
-                BoundaryAlloc::alloc(
-                    &allocator,
-                    Layout::from_size_align(size, alignment).unwrap(),
-                    boundary,
-                )
-            };
-            assert!(ptr as usize % alignment == 0);
-            if boundary != 0 {
-                // boundary check
-                let prev_boundary = ptr as usize - (ptr as usize % boundary);
-                assert!(
-                    prev_boundary <= ptr as usize && ptr as usize + size - 1 < prev_boundary + boundary,
-                    "alignment: {:x}, boundary: {:x}, size: {:x}\nallocated area: {:p} - {:p}, boundary: {:p} - {:p}",
-                    alignment,
-                    boundary,
-                    size,
-                    ptr,
-                    (ptr as usize + size - 1) as *mut u8,
-                    prev_boundary as *mut u8,
-                    (prev_boundary + boundary) as *mut u8
-                );
-            }
-            unsafe {
-                GlobalAlloc::dealloc(
-                    &allocator,
-                    ptr,
-                    Layout::from_size_align(size, alignment).unwrap(),
-                );
-            }
-        }
+        allocator::tests::alloc_huge_times_template(&allocator, SIZE / 1024, 1000);
     }
 }

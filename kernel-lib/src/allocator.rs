@@ -144,6 +144,62 @@ where
 #[cfg(test)]
 mod tests {
 
+    pub fn alloc_huge_times_template(
+        allocator: &impl BoundaryAlloc,
+        n_times: usize,
+        upper_bound: usize,
+    ) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        for _ in 0..n_times {
+            let alignment: usize = rng.gen_range(0..upper_bound);
+            // alignment must be power of 2
+            let alignment = 2i32.pow(alignment.ilog2()) as usize;
+            let size = rng.gen_range(0..upper_bound);
+            let mut boundary: usize;
+            if rng.gen_bool(0.99) {
+                boundary = rng.gen_range(size..upper_bound);
+                // boundary must be power of 2
+                boundary = 2i32.pow(boundary.ilog2()) as usize;
+                if boundary < size {
+                    boundary *= 2;
+                }
+            } else {
+                boundary = 0;
+            }
+            let ptr = unsafe {
+                BoundaryAlloc::alloc(
+                    allocator,
+                    Layout::from_size_align(size, alignment).unwrap(),
+                    boundary,
+                )
+            };
+            assert!(ptr as usize % alignment == 0);
+            if boundary != 0 {
+                // boundary check
+                let prev_boundary = ptr as usize - (ptr as usize % boundary);
+                assert!(
+                    prev_boundary <= ptr as usize && ptr as usize + size - 1 < prev_boundary + boundary,
+                    "alignment: {:x}, boundary: {:x}, size: {:x}\nallocated area: {:p} - {:p}, boundary: {:p} - {:p}",
+                    alignment,
+                    boundary,
+                    size,
+                    ptr,
+                    (ptr as usize + size - 1) as *mut u8,
+                    prev_boundary as *mut u8,
+                    (prev_boundary + boundary) as *mut u8
+                );
+            }
+            unsafe {
+                BoundaryAlloc::dealloc(
+                    allocator,
+                    ptr,
+                    Layout::from_size_align(size, alignment).unwrap(),
+                );
+            }
+        }
+    }
+
     use super::*;
     #[test]
     fn alloc_array_test() {
