@@ -1,12 +1,8 @@
 use crate::allocator::BoundaryAlloc;
-use core::{
-    alloc::{Allocator, GlobalAlloc, Layout, LayoutError},
-    mem::MaybeUninit,
-};
+use core::alloc::{Allocator, GlobalAlloc, Layout};
 
 extern crate alloc;
 use crate::mutex::Mutex;
-use alloc::boxed::Box;
 
 struct FixedLengthAllocatorInner<const SIZE: usize> {
     heap: [u8; SIZE],
@@ -58,6 +54,7 @@ fn ceil(value: usize, alignment: usize) -> usize {
 
 unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
     unsafe fn alloc(&self, layout: Layout, boundary: usize) -> *mut u8 {
+        debug_assert!(boundary == 0 || boundary.is_power_of_two());
         let mut allocator = crate::lock!(self.0);
         let start = allocator.next;
         let current_ptr = allocator.heap.as_mut_ptr().add(start);
@@ -98,6 +95,13 @@ unsafe impl<const SIZE: usize> GlobalAlloc for FixedLengthAllocator<SIZE> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ceil_test() {
+        assert_eq!(ceil(100, 4), 100);
+        assert_eq!(ceil(101, 4), 104);
+    }
+
     #[test]
     fn alignment_test() {
         let allocator = FixedLengthAllocator::<2048>::new();
@@ -166,5 +170,60 @@ mod tests {
         assert!(ptr3 % alignment == 0);
         let prev_boundary = ptr3 - (ptr3 % boundary);
         assert!(prev_boundary <= ptr3 && ptr3 + size - 1 < prev_boundary + boundary);
+    }
+
+    #[test]
+    fn alloc_huge_times() {
+        use rand::Rng;
+        const SIZE: usize = 100 * 1024;
+        let allocator = FixedLengthAllocator::<SIZE>::new();
+        let mut rng = rand::thread_rng();
+        for _ in 0..(SIZE / 1024) {
+            let alignment: usize = rng.gen_range(0..1000);
+            // alignment must be power of 2
+            let alignment = 2i32.pow(alignment.ilog2()) as usize;
+            let size = rng.gen_range(0..1000);
+            let mut boundary: usize;
+            if rng.gen_bool(0.99) {
+                boundary = rng.gen_range(size..1000);
+                // boundary must be power of 2
+                boundary = 2i32.pow(boundary.ilog2()) as usize;
+                if boundary < size {
+                    boundary *= 2;
+                }
+            } else {
+                boundary = 0;
+            }
+            let ptr = unsafe {
+                BoundaryAlloc::alloc(
+                    &allocator,
+                    Layout::from_size_align(size, alignment).unwrap(),
+                    boundary,
+                )
+            };
+            assert!(ptr as usize % alignment == 0);
+            if boundary != 0 {
+                // boundary check
+                let prev_boundary = ptr as usize - (ptr as usize % boundary);
+                assert!(
+                    prev_boundary <= ptr as usize && ptr as usize + size - 1 < prev_boundary + boundary,
+                    "alignment: {:x}, boundary: {:x}, size: {:x}\nallocated area: {:p} - {:p}, boundary: {:p} - {:p}",
+                    alignment,
+                    boundary,
+                    size,
+                    ptr,
+                    (ptr as usize + size - 1) as *mut u8,
+                    prev_boundary as *mut u8,
+                    (prev_boundary + boundary) as *mut u8
+                );
+            }
+            unsafe {
+                GlobalAlloc::dealloc(
+                    &allocator,
+                    ptr,
+                    Layout::from_size_align(size, alignment).unwrap(),
+                );
+            }
+        }
     }
 }
