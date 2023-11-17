@@ -1,10 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 #![feature(lang_items)]
-use core::{
-    arch::{asm, global_asm},
-    panic::PanicInfo,
-};
+use core::{arch::asm, panic::PanicInfo};
 
 pub extern crate alloc;
 use common::types::KernelMainArg;
@@ -32,22 +29,31 @@ const STACK_SIZE: usize = 1024 * 1024;
 pub struct KernelStack([u8; STACK_SIZE]);
 #[no_mangle]
 static mut KERNEL_STACK: KernelStack = KernelStack([0; STACK_SIZE]);
-global_asm!(
-    r#"
-.global kernel_main
-kernel_main:
-    jmp kernel_main2
-    mov rsp, KERNEL_STACK + 1024 * 1024
-    jmp kernel_main2
-.fin:
-    hlt
-    jmp .fin
-"#
-);
 
 #[no_mangle]
-extern "C" fn kernel_main2(arg: *const KernelMainArg) -> ! {
-    serial_println!("Hello lemola os!!! from serial");
+extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
+    let end_ptr = unsafe { KERNEL_STACK.0.as_ptr_range().end };
+
+    unsafe {
+        asm!(
+            "mov rsp, {0}",
+            "call rax",
+            in(reg) end_ptr,
+            in("rax") kernel_main2 as extern "sysv64" fn(*const KernelMainArg) -> !,
+            in("rdi") arg,
+            clobber_abi("sysv64")
+        )
+    };
+
+    loop {
+        unsafe {
+            asm!("hlt");
+        }
+    }
+}
+
+#[no_mangle]
+extern "sysv64" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     let arg = unsafe { (*arg).clone() };
     let memory_map_iter = unsafe { arg.memory_map_entry.as_ref().unwrap().into_iter() };
     let graphics_info = arg.graphics_info;

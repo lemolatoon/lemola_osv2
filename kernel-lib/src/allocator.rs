@@ -152,7 +152,7 @@ mod tests {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         for _ in 0..n_times {
-            let alignment: usize = rng.gen_range(0..upper_bound);
+            let alignment: usize = rng.gen_range(1..upper_bound);
             // alignment must be power of 2
             let alignment = 2i32.pow(alignment.ilog2()) as usize;
             let size = rng.gen_range(0..upper_bound);
