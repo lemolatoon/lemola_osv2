@@ -1,9 +1,10 @@
+pub mod bump_allocator;
 pub mod fixed_length_allocator;
 
 extern crate alloc;
 use alloc::boxed::Box;
 use core::{
-    alloc::{Allocator, Layout, LayoutError},
+    alloc::{Allocator, Layout},
     mem::MaybeUninit,
     ops::Range,
 };
@@ -49,28 +50,30 @@ pub fn align_and_boundary_to(
     return Ok(alloc_ptr..end_ptr);
 }
 
+#[macro_export]
 macro_rules! impl_global_alloc_for_boundary_alloc {
     ($t:ty) => {
         unsafe impl core::alloc::GlobalAlloc for $t {
-            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-                $crate::allocator::BoundaryAlloc::alloc(self, layout)
+            unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+                $crate::allocator::BoundaryAlloc::alloc(self, layout, 0)
             }
 
-            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
                 $crate::allocator::BoundaryAlloc::dealloc(self, ptr, layout)
             }
         }
     };
 }
 
+#[macro_export]
 macro_rules! impl_allocator_for_global_alloc {
     ($t:ty) => {
-        unsafe impl core::Alloc::Allocator for $t {
+        unsafe impl<'a> core::alloc::Allocator for &'a $t {
             fn allocate(
                 &self,
-                layout: Layout,
+                layout: core::alloc::Layout,
             ) -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError> {
-                let ptr = unsafe { GlobalAlloc::alloc(self, layout) };
+                let ptr = unsafe { core::alloc::GlobalAlloc::alloc(*self, layout) };
                 if ptr.is_null() {
                     Err(core::alloc::AllocError)
                 } else {
@@ -83,8 +86,8 @@ macro_rules! impl_allocator_for_global_alloc {
                 }
             }
 
-            unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: Layout) {
-                unsafe { GlobalAlloc::dealloc(*self, ptr.as_ptr(), layout) };
+            unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+                unsafe { core::alloc::GlobalAlloc::dealloc(*self, ptr.as_ptr(), layout) };
             }
         }
     };
@@ -102,14 +105,16 @@ pub fn alloc_with_boundary<'a, T, A>(
     allocator: &'a A,
     alignment: usize,
     boundary: usize,
-) -> Result<Box<MaybeUninit<T>, &'a A>, LayoutError>
+) -> Result<Box<MaybeUninit<T>, &'a A>, ()>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
 {
-    let layout = Layout::from_size_align(core::mem::size_of::<T>(), alignment)?;
+    let layout = Layout::from_size_align(core::mem::size_of::<T>(), alignment).map_err(|_| ())?;
     let ptr = alloc_with_boundary_raw(allocator, layout, boundary) as *mut MaybeUninit<T>;
-    debug_assert!(!ptr.is_null());
+    if ptr.is_null() {
+        return Err(());
+    }
     Ok(unsafe { Box::from_raw_in(ptr, allocator) })
 }
 
@@ -118,13 +123,16 @@ pub fn alloc_with_boundary_with_default_else<'a, T, A>(
     alignment: usize,
     boundary: usize,
     default: impl FnOnce() -> T,
-) -> Result<Box<T, &'a A>, LayoutError>
+) -> Result<Box<T, &'a A>, ()>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
 {
     let mut allocated = alloc_with_boundary::<T, A>(allocator, alignment, boundary)?;
     let ptr = allocated.as_mut_ptr();
+    if ptr.is_null() {
+        return Err(());
+    }
     unsafe { ptr.write(default()) };
     Ok(unsafe { allocated.assume_init() })
 }
@@ -134,15 +142,17 @@ pub fn alloc_array_with_boundary<'a, T, A>(
     len: usize,
     alignment: usize,
     boundary: usize,
-) -> Result<Box<[MaybeUninit<T>], &'a A>, LayoutError>
+) -> Result<Box<[MaybeUninit<T>], &'a A>, ()>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
 {
     let size = len * core::mem::size_of::<T>();
-    let layout = Layout::from_size_align(size, alignment)?;
+    let layout = Layout::from_size_align(size, alignment).map_err(|_| ())?;
     let array_pointer = alloc_with_boundary_raw(allocator, layout, boundary) as *mut MaybeUninit<T>;
-    debug_assert!(!array_pointer.is_null());
+    if array_pointer.is_null() {
+        return Err(());
+    }
     let slice = unsafe { core::slice::from_raw_parts_mut(array_pointer, len) };
     Ok(unsafe { Box::from_raw_in(slice, allocator) })
 }
@@ -153,7 +163,7 @@ pub fn alloc_array_with_boundary_with_default_else<'a, T, A>(
     alignment: usize,
     boundary: usize,
     default: impl Fn() -> T,
-) -> Result<Box<[T], &'a A>, LayoutError>
+) -> Result<Box<[T], &'a A>, ()>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
