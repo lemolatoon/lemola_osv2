@@ -5,6 +5,7 @@ use alloc::boxed::Box;
 use core::{
     alloc::{Allocator, Layout, LayoutError},
     mem::MaybeUninit,
+    ops::Range,
 };
 pub use fixed_length_allocator::FixedLengthAllocator;
 
@@ -22,6 +23,30 @@ pub unsafe trait BoundaryAlloc {
     /// - ptr must denote a block of memory currently allocated via this allocator,
     /// - layout must be the same layout that was used to allocate that block of memory.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout);
+}
+
+fn ceil(value: usize, alignment: usize) -> usize {
+    (value + alignment - 1) & !(alignment - 1)
+}
+pub fn align_and_boundary_to(
+    from_ptr: usize,
+    layout: Layout,
+    boundary: usize,
+) -> Result<Range<usize>, ()> {
+    debug_assert!(boundary == 0 || boundary.is_power_of_two());
+    debug_assert!(boundary == 0 || layout.size() <= boundary);
+
+    let mut alloc_ptr = ceil(from_ptr, layout.align());
+    if boundary > 0 {
+        let next_boundary = ceil(alloc_ptr, boundary);
+        // if allocated area steps over boundary
+        if next_boundary < alloc_ptr.checked_add(layout.size()).ok_or(())? {
+            alloc_ptr = next_boundary;
+        }
+    }
+
+    let end_ptr = alloc_ptr.checked_add(layout.size()).ok_or(())?;
+    return Ok(alloc_ptr..end_ptr);
 }
 
 macro_rules! impl_global_alloc_for_boundary_alloc {
@@ -143,6 +168,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     pub fn alloc_huge_times_template(
         allocator: &impl BoundaryAlloc,
@@ -200,7 +226,24 @@ mod tests {
         }
     }
 
-    use super::*;
+    #[test]
+    fn ceil_test() {
+        assert_eq!(ceil(100, 4), 100);
+        assert_eq!(ceil(101, 4), 104);
+    }
+
+    #[test]
+    fn align_and_boundary_to_test() {
+        assert_eq!(
+            align_and_boundary_to(
+                0x1111,
+                Layout::from_size_align(0x100, 0x2000).unwrap(),
+                0x400
+            ),
+            Ok(0x2000..0x2100),
+        );
+    }
+
     #[test]
     fn alloc_array_test() {
         let allocator = FixedLengthAllocator::<4096>::new();

@@ -6,6 +6,7 @@ use crate::mutex::Mutex;
 
 struct FixedLengthAllocatorInner<const SIZE: usize> {
     heap: [u8; SIZE],
+    /// next in 0..SIZE, which is the index of the next available byte
     next: usize,
 }
 pub struct FixedLengthAllocator<const SIZE: usize>(Mutex<FixedLengthAllocatorInner<SIZE>>);
@@ -46,10 +47,15 @@ impl<const SIZE: usize> FixedLengthAllocatorInner<SIZE> {
             next: 0,
         }
     }
-}
 
-fn ceil(value: usize, alignment: usize) -> usize {
-    (value + alignment - 1) & !(alignment - 1)
+    pub fn heap_range(&self) -> core::ops::Range<usize> {
+        self.heap.as_ptr() as usize..self.heap_end()
+    }
+
+    /// Return the end of heap (which is not included in heap)
+    pub fn heap_end(&self) -> usize {
+        self.heap.as_ptr() as usize + SIZE
+    }
 }
 
 unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
@@ -58,22 +64,27 @@ unsafe impl<const SIZE: usize> BoundaryAlloc for FixedLengthAllocator<SIZE> {
         let mut allocator = crate::lock!(self.0);
         let start = allocator.next;
         let current_ptr = allocator.heap.as_mut_ptr().add(start);
-        let mut alloc_ptr = ceil(current_ptr as usize, layout.align());
-        if boundary > 0 {
-            let next_boundary = ceil(alloc_ptr, boundary);
-            // if allocated area steps over boundary
-            if next_boundary < alloc_ptr + layout.size() {
-                alloc_ptr = next_boundary;
-            }
-        }
-        let end = alloc_ptr + layout.size() - allocator.heap.as_ptr() as usize;
-        if end > SIZE {
+        let Ok(alloc_range) =
+            crate::allocator::align_and_boundary_to(current_ptr as usize, layout, boundary)
+        else {
+            panic!("[ALLOCATOR] Failed to allocate");
+        };
+        if alloc_range.end >= allocator.heap_end() {
+            #[cfg(test)]
+            std::eprintln!(
+                "layout: {:x?}, boundary: 0x{:x}, heap: {:x?}, alloc_range: {:x?}, next: {:x}",
+                layout,
+                boundary,
+                allocator.heap_range(),
+                alloc_range,
+                allocator.next
+            );
             panic!("[ALLOCATOR] Out of memory");
             #[allow(unreachable_code)]
             core::ptr::null_mut()
         } else {
-            allocator.next = end;
-            alloc_ptr as *mut u8
+            allocator.next = alloc_range.end - allocator.heap_range().start;
+            alloc_range.start as *mut u8
         }
     }
 
@@ -97,13 +108,6 @@ mod tests {
     use crate::allocator;
 
     use super::*;
-
-    #[test]
-    fn ceil_test() {
-        assert_eq!(ceil(100, 4), 100);
-        assert_eq!(ceil(101, 4), 104);
-    }
-
     #[test]
     fn alignment_test() {
         let allocator = FixedLengthAllocator::<2048>::new();
