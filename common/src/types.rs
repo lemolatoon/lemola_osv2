@@ -1,4 +1,5 @@
-use uefi_raw::table::boot::MemoryDescriptor;
+pub use uefi_raw::table::boot::MemoryDescriptor;
+pub use uefi_raw::table::boot::MemoryType;
 
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -13,6 +14,7 @@ pub struct MemMapEntry {
     pub size: u64,
 }
 
+#[derive(Debug, Clone)]
 pub struct MemMapIter<'a> {
     index: usize,
     size: usize,

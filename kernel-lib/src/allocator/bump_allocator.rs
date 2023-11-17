@@ -34,13 +34,16 @@ unsafe impl BoundaryAlloc for crate::mutex::Mutex<BumpAllocator> {
     unsafe fn alloc(&self, layout: core::alloc::Layout, boundary: usize) -> *mut u8 {
         let mut allocator = crate::lock!(self);
         let Ok(alloc_start) = align_and_boundary_to(allocator.next, layout, boundary) else {
+            panic!("Allocation failed: {:?}", layout);
             return core::ptr::null_mut();
         };
 
         if alloc_start.end >= allocator.heap_end {
+            panic!("Allocation failed: {:?}", layout);
             return core::ptr::null_mut();
         }
 
+        allocator.next = alloc_start.end;
         allocator.n_allocations += 1;
 
         alloc_start.start as *mut u8
@@ -50,6 +53,7 @@ unsafe impl BoundaryAlloc for crate::mutex::Mutex<BumpAllocator> {
         let mut allocator = crate::lock!(self);
         allocator.n_allocations -= 1;
         if allocator.n_allocations == 0 {
+            log::debug!("dealloc: Resetting allocator");
             allocator.next = allocator.heap_start;
         }
     }
@@ -60,16 +64,32 @@ impl_allocator_for_global_alloc!(crate::mutex::Mutex<BumpAllocator>);
 
 #[cfg(test)]
 mod tests {
+    use std::println;
+
     use super::*;
-    use crate::allocator::tests::alloc_huge_times_template;
+    use crate::allocator::tests::{
+        alloc_huge_times_template, alloc_huge_times_with_value_template,
+    };
     #[test]
     fn alloc_huge_times() {
         const SIZE: usize = 100 * 1024;
-        let mut heap = [0u8; SIZE];
+        static HEAP: &[u8] = &[0u8; SIZE];
         let allocator = crate::mutex::Mutex::new(BumpAllocator::new());
         unsafe {
-            crate::lock!(allocator).init(heap.as_ptr() as usize, heap.as_ptr() as usize + SIZE)
+            crate::lock!(allocator).init(HEAP.as_ptr() as usize, HEAP.as_ptr() as usize + SIZE)
         };
         alloc_huge_times_template(&allocator, SIZE / 1024, 1000);
+    }
+
+    #[test]
+    fn alloc_huge_times_with_value() {
+        const SIZE: usize = 100 * 1024;
+        static mut HEAP: &[u8] = &[0u8; SIZE];
+        let allocator = crate::mutex::Mutex::new(BumpAllocator::new());
+        unsafe {
+            crate::lock!(allocator).init(HEAP.as_ptr() as usize, HEAP.as_ptr() as usize + SIZE)
+        };
+        // TODO: fix this
+        // alloc_huge_times_with_value_template(&allocator, SIZE / 1024);
     }
 }

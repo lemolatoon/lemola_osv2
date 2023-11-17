@@ -178,6 +178,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::println;
+
     use super::*;
 
     pub fn alloc_huge_times_template(
@@ -233,6 +235,31 @@ mod tests {
                     Layout::from_size_align(size, alignment).unwrap(),
                 );
             }
+        }
+    }
+
+    pub fn alloc_huge_times_with_value_template<'a, A>(allocator: &'a A, n_times: usize)
+    where
+        A: BoundaryAlloc,
+        &'a A: Allocator,
+    {
+        for i in 0..n_times {
+            let mut vec = Vec::<usize, _>::with_capacity_in(i, allocator);
+            let mut vec2 = Vec::<usize, _>::with_capacity_in(i, allocator);
+            let one = Box::<usize, _>::new_in(core::hint::black_box(1), allocator);
+            for j in 0..i {
+                vec.push(core::hint::black_box(j));
+            }
+            for j in 0..i {
+                vec2.push(core::hint::black_box(j));
+            }
+
+            assert_eq!(vec.len(), i);
+            for (j, val) in vec.into_iter().enumerate() {
+                assert_eq!(val, j);
+                assert_eq!(vec2[j], j);
+            }
+            assert_eq!(*one, 1);
         }
     }
 

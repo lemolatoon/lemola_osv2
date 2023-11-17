@@ -184,4 +184,11 @@ mod tests {
         let allocator = FixedLengthAllocator::<SIZE>::new();
         allocator::tests::alloc_huge_times_template(&allocator, SIZE / 1024, 1000);
     }
+
+    #[test]
+    fn alloc_huge_times_with_value() {
+        const SIZE: usize = 100 * 1024;
+        let allocator = FixedLengthAllocator::<SIZE>::new();
+        allocator::tests::alloc_huge_times_with_value_template(&allocator, SIZE / 1024);
+    }
 }
