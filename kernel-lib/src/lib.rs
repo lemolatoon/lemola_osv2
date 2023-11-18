@@ -249,6 +249,10 @@ mod test {
         fn pixcels_per_scan_line(&self) -> usize {
             self.horizontal_resolution() / 4
         }
+
+        fn frame_buffer_base(&self) -> *mut u8 {
+            panic!("should not be called")
+        }
     }
 
     impl AsciiWriter for MockWriter {
