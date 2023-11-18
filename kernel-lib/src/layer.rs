@@ -2,10 +2,13 @@ extern crate alloc;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use alloc::{collections::BTreeMap, vec};
+use common::types::{GraphicsInfo, PixcelFormat};
 
+use crate::pixel::{MarkerColor, RenderedPixel};
 use crate::{AsciiWriter, Color, PixcelWritableMut};
 
 #[derive(Debug, Clone, Copy)]
@@ -22,6 +25,8 @@ impl Position {
 
 pub struct Window {
     transparent_color: Option<Color>,
+    rendering_handler: Box<dyn RenderedPixel + Send + Sync>,
+    buffer: Vec<u8>,
     pixels: Vec<Vec<Color>>,
     position: Position,
 }
@@ -30,14 +35,18 @@ impl Window {
     pub fn new(
         width: usize,
         height: usize,
+        rendering_handler: Box<dyn RenderedPixel + Send + Sync>,
         transparent_color: Option<Color>,
         position: Position,
     ) -> Self {
         let mut pixels = Vec::with_capacity(width);
-        for _ in 0..height {
+        for _ in 0..width {
             pixels.push(vec![transparent_color.unwrap_or(Color::black()); height]);
         }
+        let buffer = vec![0; width * height * 4];
         Self {
+            rendering_handler,
+            buffer,
             transparent_color,
             pixels,
             position,
@@ -53,39 +62,96 @@ impl Window {
         self.position.y += y_diff;
     }
 
-    pub fn height(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.pixels.len()
     }
 
-    pub fn width(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.pixels[0].len()
     }
 
     pub fn flush(&self, writer: &(dyn AsciiWriter + Send + Sync)) {
-        for y in self.position.y
-            ..core::cmp::min(
-                self.position.y + self.height(),
-                writer.horizontal_resolution(),
-            )
-        {
-            for x in self.position.x
+        if let Some(transparent_color) = self.transparent_color {
+            for y in self.position.y
+                ..core::cmp::min(
+                    self.position.y + self.height(),
+                    writer.horizontal_resolution(),
+                )
+            {
+                for x in self.position.x
+                    ..core::cmp::min(
+                        self.position.x + self.width(),
+                        writer.pixcels_per_scan_line(),
+                    )
+                {
+                    let color = self.pixels[x - self.position.x][y - self.position.y];
+                    if color == transparent_color {
+                        continue;
+                    }
+                    writer.write(x, y, color);
+                }
+            }
+        } else {
+            // let frame_buffer_base = writer.frame_buffer_base();
+            // let height = core::cmp::min(
+            //     self.height(),
+            //     writer.horizontal_resolution() - self.position.y,
+            // );
+            // for y in 0..height {
+            //     let offset =
+            //         (self.position.y + y) * writer.pixcels_per_scan_line() + self.position.x * 4;
+            //     let frame_buffer_row_base = unsafe { frame_buffer_base.add(offset) };
+            //     let width = core::cmp::min(
+            //         self.width(),
+            //         writer.pixcels_per_scan_line() - self.position.x,
+            //     );
+            //     let frame_buffer_row_slice =
+            //         unsafe { core::slice::from_raw_parts_mut(frame_buffer_row_base, width) };
+
+            //     let buffer_row_slice = &self.buffer[(y * self.width())..(y * self.width() + width)];
+            //     log::debug!("buffer_row_slice: {:?}", buffer_row_slice.as_ptr_range());
+            //     log::debug!(
+            //         "frame_buffer_row_slice: {:?}",
+            //         frame_buffer_row_slice.as_ptr_range()
+            //     );
+            //     frame_buffer_row_slice.copy_from_slice(buffer_row_slice);
+            // }
+            let y_range = self.position.y
+                ..core::cmp::min(
+                    self.position.y + self.height(),
+                    writer.horizontal_resolution(),
+                );
+            let x_range = self.position.x
                 ..core::cmp::min(
                     self.position.x + self.width(),
                     writer.pixcels_per_scan_line(),
-                )
-            {
-                let color = self.pixels[x - self.position.x][y - self.position.y];
-                if Some(color) == self.transparent_color {
-                    continue;
-                }
+                );
+            let get_frame_buffer_index =
+                |x: usize, y: usize| (x + y * writer.pixcels_per_scan_line()) * 4;
+            let get_buffer_index = |x: usize, y: usize| (x + y * self.width()) * 4;
+            let frame_buffer_base = writer.frame_buffer_base();
+            for y in y_range {
+                let offset = get_frame_buffer_index(x_range.start, y);
+                let frame_buffer_row_base = unsafe { frame_buffer_base.add(offset) };
+                let width = (x_range.end - x_range.start) * 4;
+                let frame_buffer_row_slice =
+                    unsafe { core::slice::from_raw_parts_mut(frame_buffer_row_base, width) };
 
-                writer.write(x, y, color);
+                let buffer_row_slice = &self.buffer[get_buffer_index(
+                    x_range.start - self.position.x,
+                    y - self.position.y,
+                )
+                    ..get_buffer_index(x_range.end - self.position.x, y - self.position.y)];
+
+                frame_buffer_row_slice.copy_from_slice(buffer_row_slice);
             }
         }
     }
 
     pub fn write(&mut self, x: usize, y: usize, c: Color) {
         self.pixels[x][y] = c;
+        let index = (x + y * self.width()) * 4;
+        self.buffer[index..index + 4].copy_from_slice(&self.rendering_handler.pixel(c));
     }
 }
 
@@ -107,6 +173,7 @@ impl Layer {
     pub fn new(window: Window) -> Self {
         static LATEST_UNUSED_ID: AtomicUsize = AtomicUsize::new(0);
         let id = LayerId(LATEST_UNUSED_ID.fetch_add(1, Ordering::Relaxed));
+        assert!(id < LayerId::uninitialized());
         Self { id, window }
     }
 
@@ -163,11 +230,10 @@ impl<'a> LayerManager<'a> {
     }
 
     pub fn flush(&self) {
-        for y in 0..self.writer.vertical_resolution() {
-            for x in 0..self.writer.horizontal_resolution() {
-                self.writer.write(x, y, Color::black());
-            }
-        }
+        // clear
+        // let base = self.writer.frame_buffer_base();
+        // let len = self.writer.vertical_resolution() * self.writer.pixcels_per_scan_line() * 4;
+        // unsafe { core::ptr::write_bytes(base, 0, len) }
 
         for layer_id in self.layer_stack.iter() {
             let layer = self.layers.get(layer_id).unwrap();

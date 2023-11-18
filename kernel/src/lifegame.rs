@@ -6,9 +6,11 @@ use alloc::vec::Vec;
 use kernel_lib::futures::yield_pending;
 use kernel_lib::layer::{Position, Window};
 use kernel_lib::mutex::Mutex;
+use kernel_lib::pixel::new_rendering_handler;
 use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
 
+use crate::graphics::get_graphics_info;
 use crate::lock_layer_manager_mut;
 
 pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
@@ -39,7 +41,8 @@ pub async fn do_lifegame() {
     let window = Window::new(
         SIZE * PIXCEL_SIZE,
         SIZE * PIXCEL_SIZE,
-        Some(Color::black()),
+        new_rendering_handler(*get_graphics_info()),
+        None,
         Position::new(0, 0),
     );
     let id = { crate::lock_layer_manager_mut!().new_layer(window) };

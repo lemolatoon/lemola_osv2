@@ -1,5 +1,6 @@
 use kernel_lib::{
     layer::{LayerId, Position, Window},
+    pixel::new_rendering_handler,
     render::{AtomicVec2D, RendererMut, Vector2D},
     shapes::{
         mouse::{MouseCursorPixel, MOUSE_CURSOR_SHAPE},
@@ -8,6 +9,7 @@ use kernel_lib::{
 };
 
 use crate::{
+    graphics::get_graphics_info,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
 };
@@ -32,6 +34,7 @@ pub unsafe fn init_mouse_cursor_layer() -> LayerId {
     let window = Window::new(
         MOUSE_CURSOR_SHAPE.get_width(),
         MOUSE_CURSOR_SHAPE.get_height(),
+        new_rendering_handler(*get_graphics_info()),
         Some(MouseCursorPixel::BackGround.into()),
         Position::new(0, 0),
     );

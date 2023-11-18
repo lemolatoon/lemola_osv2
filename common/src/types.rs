@@ -92,6 +92,16 @@ pub struct GraphicsInfo {
 }
 
 impl GraphicsInfo {
+    pub const fn uninitialized() -> Self {
+        Self {
+            horizontal_resolution: 0,
+            vertical_resolution: 0,
+            pixels_per_scan_line: 0,
+            frame_buffer_base: core::ptr::null_mut(),
+            pixcel_format: PixcelFormat::Rgb,
+        }
+    }
+
     pub fn new(
         horizontal_resolution: usize,
         vertical_resolution: usize,

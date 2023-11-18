@@ -8,6 +8,7 @@ pub mod futures;
 pub mod layer;
 pub mod logger;
 pub mod mutex;
+pub mod pixel;
 pub mod render;
 pub mod shapes;
 pub mod write_to;
@@ -53,6 +54,7 @@ pub trait PixcelInfo {
     fn horizontal_resolution(&self) -> usize;
     fn vertical_resolution(&self) -> usize;
     fn pixcels_per_scan_line(&self) -> usize;
+    fn frame_buffer_base(&self) -> *mut u8;
 }
 
 pub trait PixcelWritable {
