@@ -182,8 +182,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::println;
-
     use super::*;
 
     pub fn alloc_huge_times_template(
@@ -250,7 +248,10 @@ mod tests {
         for i in 0..n_times {
             let mut vec = Vec::<usize, _>::with_capacity_in(i, allocator);
             let mut vec2 = Vec::<usize, _>::with_capacity_in(i, allocator);
-            let one = Box::<usize, _>::new_in(core::hint::black_box(1), allocator);
+            let mut one = Box::<usize, _>::try_new_uninit_in(allocator).unwrap();
+            unsafe {
+                one.as_mut_ptr().write_volatile(1);
+            }
             for j in 0..i {
                 vec.push(core::hint::black_box(j));
             }
@@ -263,7 +264,7 @@ mod tests {
                 assert_eq!(val, j);
                 assert_eq!(vec2[j], j);
             }
-            assert_eq!(*one, 1);
+            assert_eq!(*unsafe { one.assume_init() }, 1);
         }
     }
 

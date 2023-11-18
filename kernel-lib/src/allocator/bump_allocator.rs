@@ -62,8 +62,6 @@ impl_allocator_for_global_alloc!(crate::mutex::Mutex<BumpAllocator>);
 
 #[cfg(test)]
 mod tests {
-    use std::println;
-
     use super::*;
     use crate::allocator::tests::{
         alloc_huge_times_template, alloc_huge_times_with_value_template,
@@ -82,12 +80,11 @@ mod tests {
     #[test]
     fn alloc_huge_times_with_value() {
         const SIZE: usize = 100 * 1024;
-        static mut HEAP: &[u8] = &[0u8; SIZE];
+        static mut HEAP: [u8; SIZE] = [0u8; SIZE];
         let allocator = crate::mutex::Mutex::new(BumpAllocator::new());
         unsafe {
             crate::lock!(allocator).init(HEAP.as_ptr() as usize, HEAP.as_ptr() as usize + SIZE)
         };
-        // TODO: fix this
-        // alloc_huge_times_with_value_template(&allocator, SIZE / 1024);
+        alloc_huge_times_with_value_template(&allocator, SIZE / 1024);
     }
 }
