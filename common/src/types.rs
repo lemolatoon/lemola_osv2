@@ -23,6 +23,9 @@ pub struct MemMapIter<'a> {
 }
 
 impl MemMapEntry {
+    /// # Safety
+    /// The caller must ensure that entry has enough size to store the given iterator.
+    /// And header(=MemMapEntry) can be placed at the beginning of the entry.
     pub unsafe fn new_inplace<'a, 'b>(
         entry: &'a mut [u8],
         size: u64,
@@ -30,12 +33,16 @@ impl MemMapEntry {
     ) {
         let header = entry.as_mut_ptr() as *mut MemMapEntry;
         (*header).size = size;
-        let desc_head = unsafe { (header as *mut MemMapEntry).add(1) } as *mut MemoryDescriptor;
+        let desc_head = unsafe { (header).add(1) } as *mut MemoryDescriptor;
         for (i, desc) in iter.enumerate() {
             unsafe { *desc_head.add(i) = *desc };
         }
     }
-    pub unsafe fn into_iter<'a>(&'a self) -> MemMapIter<'a> {
+
+    /// # Safety
+    /// The caller must ensure that an array(len = self.size) of MemoryDescriptor are
+    /// placed after this struct.
+    pub unsafe fn into_iter(&self) -> MemMapIter<'_> {
         let current = unsafe { (self as *const MemMapEntry).add(1) } as *const MemoryDescriptor;
         MemMapIter {
             index: 0,
@@ -61,7 +68,7 @@ impl<'a> Iterator for MemMapIter<'a> {
 
 impl<'a> ExactSizeIterator for MemMapIter<'a> {
     fn len(&self) -> usize {
-        self.size as usize
+        self.size
     }
 }
 

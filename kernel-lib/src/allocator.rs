@@ -26,10 +26,13 @@ pub unsafe trait BoundaryAlloc {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllocationError;
+
 fn ceil(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
-pub fn align_and_boundary_to(
+pub(crate) fn align_and_boundary_to(
     from_ptr: usize,
     layout: Layout,
     boundary: usize,
@@ -47,7 +50,7 @@ pub fn align_and_boundary_to(
     }
 
     let end_ptr = alloc_ptr.checked_add(layout.size()).ok_or(())?;
-    return Ok(alloc_ptr..end_ptr);
+    Ok(alloc_ptr..end_ptr)
 }
 
 #[macro_export]
@@ -105,15 +108,16 @@ pub fn alloc_with_boundary<'a, T, A>(
     allocator: &'a A,
     alignment: usize,
     boundary: usize,
-) -> Result<Box<MaybeUninit<T>, &'a A>, ()>
+) -> Result<Box<MaybeUninit<T>, &'a A>, AllocationError>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
 {
-    let layout = Layout::from_size_align(core::mem::size_of::<T>(), alignment).map_err(|_| ())?;
+    let layout = Layout::from_size_align(core::mem::size_of::<T>(), alignment)
+        .map_err(|_| AllocationError {})?;
     let ptr = alloc_with_boundary_raw(allocator, layout, boundary) as *mut MaybeUninit<T>;
     if ptr.is_null() {
-        return Err(());
+        return Err(AllocationError {});
     }
     Ok(unsafe { Box::from_raw_in(ptr, allocator) })
 }
@@ -123,7 +127,7 @@ pub fn alloc_with_boundary_with_default_else<'a, T, A>(
     alignment: usize,
     boundary: usize,
     default: impl FnOnce() -> T,
-) -> Result<Box<T, &'a A>, ()>
+) -> Result<Box<T, &'a A>, AllocationError>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
@@ -131,7 +135,7 @@ where
     let mut allocated = alloc_with_boundary::<T, A>(allocator, alignment, boundary)?;
     let ptr = allocated.as_mut_ptr();
     if ptr.is_null() {
-        return Err(());
+        return Err(AllocationError {});
     }
     unsafe { ptr.write(default()) };
     Ok(unsafe { allocated.assume_init() })
@@ -142,16 +146,16 @@ pub fn alloc_array_with_boundary<'a, T, A>(
     len: usize,
     alignment: usize,
     boundary: usize,
-) -> Result<Box<[MaybeUninit<T>], &'a A>, ()>
+) -> Result<Box<[MaybeUninit<T>], &'a A>, AllocationError>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,
 {
     let size = len * core::mem::size_of::<T>();
-    let layout = Layout::from_size_align(size, alignment).map_err(|_| ())?;
+    let layout = Layout::from_size_align(size, alignment).map_err(|_| AllocationError {})?;
     let array_pointer = alloc_with_boundary_raw(allocator, layout, boundary) as *mut MaybeUninit<T>;
     if array_pointer.is_null() {
-        return Err(());
+        return Err(AllocationError {});
     }
     let slice = unsafe { core::slice::from_raw_parts_mut(array_pointer, len) };
     Ok(unsafe { Box::from_raw_in(slice, allocator) })
@@ -163,7 +167,7 @@ pub fn alloc_array_with_boundary_with_default_else<'a, T, A>(
     alignment: usize,
     boundary: usize,
     default: impl Fn() -> T,
-) -> Result<Box<[T], &'a A>, ()>
+) -> Result<Box<[T], &'a A>, AllocationError>
 where
     A: BoundaryAlloc,
     &'a A: Allocator,

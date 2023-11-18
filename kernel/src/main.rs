@@ -6,7 +6,6 @@ use core::{arch::asm, panic::PanicInfo};
 pub extern crate alloc;
 use alloc::vec::Vec;
 use common::types::{KernelMainArg, MemoryType};
-use core::fmt::Write;
 use kernel::{
     alloc::alloc::{init_allocator, GlobalAllocator},
     graphics::{init_graphics, init_logger},
@@ -16,14 +15,14 @@ use kernel::{
         executor::Executor,
         task::{Priority, Task},
     },
-    println, serial, serial_println,
+    println, serial_println,
     usb::{
         class_driver::callbacks::{self, init_mouse_cursor_layer},
         device::DeviceContextInfo,
     },
     xhci::init_xhci_controller,
 };
-use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
+use kernel_lib::{render::Vector2D, Color};
 
 const STACK_SIZE: usize = 1024 * 1024;
 #[repr(align(16))]

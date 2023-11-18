@@ -212,7 +212,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     {
         let header = mem_map_buf.as_mut_ptr() as *mut MemMapEntry;
         unsafe { (*header).size = size as u64 };
-        let desc_head = unsafe { (header as *mut MemMapEntry).add(1) } as *mut MemoryDescriptor;
+        let desc_head = unsafe { (header).add(1) } as *mut MemoryDescriptor;
         for (i, desc) in memory_map.enumerate() {
             unsafe { *desc_head.add(i) = *desc };
         }
