@@ -22,16 +22,13 @@ pub static RUNNING: AtomicBool = AtomicBool::new(true);
 pub fn frame_buffer_position_to_board_position(
     frame_buffer_position: Vector2D,
 ) -> Option<(usize, usize)> {
-    log::debug!("transforming...: {:?}", &frame_buffer_position);
     let x = frame_buffer_position.x as isize - BOARD_POS.x as isize;
     let y = frame_buffer_position.y as isize - BOARD_POS.y as isize;
-    log::debug!("(relative) (x, y) = {:?}", (x, y));
     if x < 0 || y < 0 {
         return None;
     }
     let x = x as usize / PIXCEL_SIZE;
     let y = y as usize / PIXCEL_SIZE;
-    log::debug!("(x, y) = {:?}", (x, y));
     if x >= SIZE || y >= SIZE {
         return None;
     }

@@ -71,19 +71,11 @@ impl TransferRing<&'static GlobalAllocator> {
     }
 
     pub fn flip_cycle_bit_at(&mut self, trb_pointer: u64) {
-        log::debug!(
-            "writing trb_ptr: {:p} in [{:p} - {:p}]",
-            trb_pointer as *const TrbRaw,
-            self.trb_buffer.as_ptr(),
-            unsafe { self.trb_buffer.as_ptr().add(self.trb_buffer.len()) }
-        );
-        log::debug!("buffer_range: {:x?}", self.buffer_range());
         let write_index = self
             .buffer_range()
             .position(|i| i == trb_pointer as usize)
             .unwrap()
             / core::mem::size_of::<TrbRaw>();
-        log::debug!("write_index: {}", write_index);
         assert_ne!(write_index, self.trb_buffer.len() - 1);
         self.write_index = write_index;
         self.trb_buffer[write_index].toggle_cycle_bit();
@@ -91,7 +83,6 @@ impl TransferRing<&'static GlobalAllocator> {
         self.write_index += 1;
         if self.write_index == self.trb_buffer.len() - 1 {
             self.cycle_count += 1;
-            log::debug!("end of the ring");
             // reached end of the ring
             let mut link = trb::Link::new();
             link.set_ring_segment_pointer(self.trb_buffer.as_ptr() as u64);
@@ -107,8 +98,6 @@ impl TransferRing<&'static GlobalAllocator> {
             self.write_index = 0;
             self.toggle_cycle_bit();
         }
-        // serial_println!("cycle_count: {}", self.cycle_count);
-        // self.dump_state();
     }
 
     pub fn buffer_range(&self) -> core::ops::Range<usize> {

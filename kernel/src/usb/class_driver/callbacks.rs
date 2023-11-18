@@ -64,16 +64,12 @@ fn mouse_layer_id() -> LayerId {
 pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
     let y_diff = buf[2] as i8;
-    log::debug!("{:?}", [x_diff, y_diff]);
     let left_click = buf[0] & 0b1 != 0;
-    log::debug!("buf: {:?}, clicked: {}", buf, left_click);
     if left_click {
         let pos = MOUSE_CURSOR.into_vec();
         let pos = Vector2D::new(pos.0 as usize, pos.1 as usize);
-        log::debug!("frame buffer pos: {:?}", pos);
         if let Some(pos) = frame_buffer_position_to_board_position(pos) {
             let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
-            log::debug!("click_pos: {:?}", pos);
             queue.push_back(pos);
         }
     }
@@ -94,7 +90,6 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
     buf[1..]
         .iter()
         .filter_map(|&keycode| {
-            log::debug!("keycode: {}", keycode);
             if keycode == 0 {
                 None
             } else if shifted {
@@ -104,10 +99,8 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
             }
         })
         .for_each(|c| {
-            log::debug!("char: '{}'", c);
             if c == ' ' {
                 // flip the RUNNING state
-                log::debug!("flip");
                 lifegame::RUNNING.fetch_not(core::sync::atomic::Ordering::SeqCst);
             }
             print_and_flush!("{}", c)

@@ -17,7 +17,6 @@ use xhci::{
 use crate::{
     alloc::alloc::{alloc_array_with_boundary, alloc_with_boundary, GlobalAllocator},
     memory::PAGE_SIZE,
-    serial_println,
     usb::{
         class_driver::{keyboard, mouse, ClassDriverManager, DriverKind},
         device::{DeviceContextIndex, DeviceContextInfo, InputContextWrapper},
@@ -252,10 +251,8 @@ where
             // EventRing does not have front
             return;
         }
-        log::debug!("[XHCI] EventRing received");
         let primary_interrupter = primary_interrupter;
         let popped = event_ring.pop(primary_interrupter);
-        log::debug!("popped: {:x?}", popped);
         drop(registers);
         drop(event_ring);
         let _trb = match popped {
@@ -1252,7 +1249,6 @@ where
     }
 
     fn process_transfer_event(&self, event: trb::event::TransferEvent) {
-        serial_println!("TransferEvent received");
         match event.completion_code() {
             Ok(event::CompletionCode::ShortPacket | event::CompletionCode::Success) => {}
             Ok(code) => {
@@ -1298,7 +1294,6 @@ where
 
             let buffer = normal.data_buffer_pointer() as *mut u8;
             let driver_kind = self.class_driver_manager.driver_kind(slot_id as usize);
-            log::debug!("driver_kind: {:?}", driver_kind);
             match driver_kind {
                 Some(DriverKind::Mouse) => {
                     assert_eq!(
@@ -1306,8 +1301,6 @@ where
                         mouse::N_IN_TRANSFER_BYTES as u32
                     );
                     assert_eq!(3, mouse::N_IN_TRANSFER_BYTES as u32);
-                    log::debug!("buffer: {:p}", buffer);
-                    log::debug!("trb_transfer_length: {}", normal.trb_transfer_length());
                     let address = {
                         let device = self.usb_device_host_at(slot_id as usize);
                         let device = kernel_lib::lock!(device);
