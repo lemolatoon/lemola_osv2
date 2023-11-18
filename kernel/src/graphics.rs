@@ -342,7 +342,7 @@ pub static LAYER_MANGER: Mutex<OnceCell<LayerManager<'static>>> = Mutex::new(Onc
 #[macro_export]
 macro_rules! lock_layer_manager {
     () => {
-        kernel_lib::lock!(crate::graphics::LAYER_MANGER)
+        kernel_lib::lock!($crate::graphics::LAYER_MANGER)
             .get()
             .unwrap()
     };
@@ -351,7 +351,7 @@ macro_rules! lock_layer_manager {
 #[macro_export]
 macro_rules! lock_layer_manager_mut {
     () => {
-        kernel_lib::lock!(crate::graphics::LAYER_MANGER)
+        kernel_lib::lock!($crate::graphics::LAYER_MANGER)
             .get_mut()
             .unwrap()
     };
@@ -360,6 +360,6 @@ macro_rules! lock_layer_manager_mut {
 #[macro_export]
 macro_rules! lock_layer_manager_raw {
     () => {
-        kernel_lib::lock!(crate::graphics::LAYER_MANGER)
+        kernel_lib::lock!($crate::graphics::LAYER_MANGER)
     };
 }

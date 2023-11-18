@@ -1,16 +1,13 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 #![feature(lang_items)]
-use core::{
-    arch::{asm, global_asm},
-    panic::PanicInfo,
-};
+use core::{arch::asm, panic::PanicInfo};
 
 pub extern crate alloc;
-use common::types::KernelMainArg;
-use core::fmt::Write;
+use alloc::vec::Vec;
+use common::types::{KernelMainArg, MemoryType};
 use kernel::{
-    alloc::alloc::GlobalAllocator,
+    alloc::alloc::{init_allocator, GlobalAllocator},
     graphics::{init_graphics, init_logger},
     interrupts::init_idt,
     memory::MemoryMapper,
@@ -25,54 +22,74 @@ use kernel::{
     },
     xhci::init_xhci_controller,
 };
-use kernel_lib::{render::Vector2D, shapes::mouse::MOUSE_CURSOR_SHAPE, Color};
+use kernel_lib::{render::Vector2D, Color};
 
 const STACK_SIZE: usize = 1024 * 1024;
 #[repr(align(16))]
 pub struct KernelStack([u8; STACK_SIZE]);
 #[no_mangle]
 static mut KERNEL_STACK: KernelStack = KernelStack([0; STACK_SIZE]);
-global_asm!(
-    r#"
-.global kernel_main
-kernel_main:
-    jmp kernel_main2
-    mov rsp, KERNEL_STACK + 1024 * 1024
-    jmp kernel_main2
-.fin:
-    hlt
-    jmp .fin
-"#
-);
 
 #[no_mangle]
-extern "C" fn kernel_main2(arg: *const KernelMainArg) -> ! {
-    serial_println!("Hello lemola os!!! from serial");
+extern "C" fn kernel_main(arg: *const KernelMainArg) -> ! {
+    let end_ptr = unsafe { KERNEL_STACK.0.as_ptr_range().end };
+
+    unsafe {
+        asm!(
+            "mov rsp, {0}",
+            "call rax",
+            in(reg) end_ptr,
+            in("rax") kernel_main2 as extern "sysv64" fn(*const KernelMainArg) -> !,
+            in("rdi") arg,
+            clobber_abi("sysv64")
+        )
+    };
+
+    loop {
+        unsafe {
+            asm!("hlt");
+        }
+    }
+}
+
+#[no_mangle]
+extern "sysv64" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     let arg = unsafe { (*arg).clone() };
-    let memory_map_iter = unsafe { arg.memory_map_entry.as_ref().unwrap().into_iter() };
     let graphics_info = arg.graphics_info;
     let pixcel_writer = init_graphics(graphics_info);
     pixcel_writer.fill_rect(Vector2D::new(50, 50), Vector2D::new(50, 50), Color::white());
-    println!("global WRITER initialized?");
-    writeln!(
-        kernel_lib::lock!(kernel::graphics::WRITER.0)
-            .get_mut()
-            .unwrap(),
-        "Hello lemola os!!!"
-    )
-    .unwrap();
 
     init_logger();
 
-    for (i, desc) in memory_map_iter.enumerate() {
-        serial_println!("memory map entry {}: {:?}", i, desc);
-    }
-
     log::info!("global logger initialized!");
 
-    pixcel_writer.write_ascii(50, 50, 'A', Color::white(), Color::new(255, 50, 0));
-
-    pixcel_writer.fill_shape(Vector2D::new(30, 50), &MOUSE_CURSOR_SHAPE);
+    let memory_map_iter = unsafe { arg.memory_map_entry.as_ref().unwrap().into_iter() };
+    let heap = memory_map_iter
+        .clone()
+        .filter_map(|desc| {
+            if let MemoryType::CONVENTIONAL
+            | MemoryType::BOOT_SERVICES_CODE
+            | MemoryType::BOOT_SERVICES_DATA = desc.ty
+            {
+                Some(desc.phys_start..(desc.phys_start + desc.page_count * 4096))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|range| range.end - range.start)
+        .expect("no conventional memory region found");
+    unsafe {
+        init_allocator(heap.start as usize, heap.end as usize);
+    }
+    let memory_map = memory_map_iter.collect::<Vec<_>>();
+    for desc in memory_map.iter() {
+        log::debug!(
+            "[0x{:09x} - 0x{:09x}] of type {:?}",
+            desc.phys_start,
+            desc.phys_start + desc.page_count * 4096,
+            desc.ty
+        );
+    }
 
     let class_drivers = kernel::usb::class_driver::ClassDriverManager::new(
         callbacks::mouse(),

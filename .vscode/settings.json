@@ -7,4 +7,5 @@
         "./kernel-lib/Cargo.toml",
         "./common/Cargo.toml",
     ],
+    "editor.formatOnSave": true,
 }

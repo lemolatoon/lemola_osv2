@@ -25,6 +25,9 @@ pub const fn mouse() -> CallbackType {
 }
 
 /// This function must be called before any other functions that use MOUSE_LAYER_ID.
+/// # Safety
+/// This method must be called before mouse driver is initialized.
+/// Also, this method must be called only once.
 pub unsafe fn init_mouse_cursor_layer() -> LayerId {
     let window = Window::new(
         MOUSE_CURSOR_SHAPE.get_width(),
