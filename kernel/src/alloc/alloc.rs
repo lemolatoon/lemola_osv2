@@ -3,13 +3,15 @@ use alloc::boxed::Box;
 use core::mem::MaybeUninit;
 use kernel_lib::{allocator::bump_allocator::BumpAllocator, mutex::Mutex};
 
-const HEAP_SIZE: usize = 1 << 21;
-
 pub type GlobalAllocator = Mutex<BumpAllocator>;
 
 #[global_allocator]
 static ALLOCATOR: GlobalAllocator = Mutex::new(BumpAllocator::new());
 
+/// Initialize the global allocator.
+/// # Safety
+/// The caller must ensure that the given heap range is unused permanently.
+/// Also, this method must be called only once. before any allocation.
 pub unsafe fn init_allocator(heap_start: usize, heap_end: usize) {
     log::debug!(
         "Initializing allocator: {:#x} - {:#x}",

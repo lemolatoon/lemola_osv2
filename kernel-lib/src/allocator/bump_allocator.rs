@@ -34,12 +34,10 @@ unsafe impl BoundaryAlloc for crate::mutex::Mutex<BumpAllocator> {
     unsafe fn alloc(&self, layout: core::alloc::Layout, boundary: usize) -> *mut u8 {
         let mut allocator = crate::lock!(self);
         let Ok(alloc_start) = align_and_boundary_to(allocator.next, layout, boundary) else {
-            panic!("Allocation failed: {:?}", layout);
             return core::ptr::null_mut();
         };
 
         if alloc_start.end >= allocator.heap_end {
-            panic!("Allocation failed: {:?}", layout);
             return core::ptr::null_mut();
         }
 
