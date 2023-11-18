@@ -1,11 +1,10 @@
 extern crate alloc;
 use core::fmt::{self};
 
-use alloc::boxed::Box;
 use common::types::{GraphicsInfo, PixcelFormat};
 use kernel_lib::layer::LayerManager;
 use kernel_lib::mutex::Mutex;
-use kernel_lib::pixel::{Bgr, MarkerColor, RenderedPixel, Rgb};
+use kernel_lib::pixel::{Bgr, MarkerColor, Rgb};
 use kernel_lib::{
     logger::{CharWriter, DecoratedLog},
     AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,

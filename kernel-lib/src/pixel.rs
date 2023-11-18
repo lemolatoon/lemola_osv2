@@ -28,12 +28,12 @@ pub trait RenderedPixel {
 
 impl RenderedPixel for Rgb {
     fn pixel(&self, c: Color) -> [u8; 4] {
-        return [c.r, c.g, c.b, 0xff];
+        [c.r, c.g, c.b, 0xff]
     }
 }
 impl RenderedPixel for Bgr {
     fn pixel(&self, c: Color) -> [u8; 4] {
-        return [c.b, c.g, c.r, 0xff];
+        [c.b, c.g, c.r, 0xff]
     }
 }
 pub fn new_rendering_handler(graphics_info: GraphicsInfo) -> Box<dyn RenderedPixel + Send + Sync> {

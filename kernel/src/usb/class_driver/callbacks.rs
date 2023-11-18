@@ -1,7 +1,7 @@
 use kernel_lib::{
     layer::{LayerId, Position, Window},
     pixel::new_rendering_handler,
-    render::{AtomicVec2D, RendererMut, Vector2D},
+    render::{RendererMut, Vector2D},
     shapes::{
         mouse::{MouseCursorPixel, MOUSE_CURSOR_SHAPE},
         Shape,
@@ -13,8 +13,6 @@ use crate::{
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
 };
-
-static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(0, 0);
 
 pub type CallbackType = fn(u8, &[u8]);
 

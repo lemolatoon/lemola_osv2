@@ -6,9 +6,8 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use alloc::{collections::BTreeMap, vec};
-use common::types::{GraphicsInfo, PixcelFormat};
 
-use crate::pixel::{MarkerColor, RenderedPixel};
+use crate::pixel::RenderedPixel;
 use crate::{AsciiWriter, Color, PixcelWritableMut};
 
 #[derive(Debug, Clone, Copy)]
