@@ -1,15 +1,18 @@
 use kernel_lib::{
-    render::{AtomicVec2D, Vector2D},
-    shapes::mouse::MOUSE_CURSOR_SHAPE,
+    layer::{LayerId, Position, Window},
+    pixel::new_rendering_handler,
+    render::{RendererMut, Vector2D},
+    shapes::{
+        mouse::{MouseCursorPixel, MOUSE_CURSOR_SHAPE},
+        Shape,
+    },
 };
 
 use crate::{
-    graphics::get_pixcel_writer,
+    graphics::get_graphics_info,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
 };
-
-static MOUSE_CURSOR: AtomicVec2D = AtomicVec2D::new(700, 500);
 
 pub type CallbackType = fn(u8, &[u8]);
 
@@ -21,40 +24,78 @@ pub const fn mouse() -> CallbackType {
     _mouse
 }
 
+/// This function must be called before any other functions that use MOUSE_LAYER_ID.
+/// # Safety
+/// This method must be called before mouse driver is initialized.
+/// Also, this method must be called only once.
+pub unsafe fn init_mouse_cursor_layer() -> LayerId {
+    let window = Window::new(
+        MOUSE_CURSOR_SHAPE.get_width(),
+        MOUSE_CURSOR_SHAPE.get_height(),
+        new_rendering_handler(*get_graphics_info()),
+        Some(MouseCursorPixel::BackGround.into()),
+        Position::new(0, 0),
+    );
+    let id = {
+        let mut mgr = crate::lock_layer_manager_raw!();
+        let mgr = mgr.get_mut().unwrap();
+        let id = mgr.new_layer(window);
+        mgr.move_relative(id, 0, 0);
+        let layer = mgr.layer_mut(id).unwrap();
+        layer.fill_shape(Vector2D::new(0, 0), &MOUSE_CURSOR_SHAPE);
+
+        id
+    };
+
+    // Safety: This function assumed to be called before any other functions that use MOUSE_LAYER_ID.
+    unsafe {
+        MOUSE_LAYER_ID = id;
+    };
+    id
+}
+
+static mut MOUSE_LAYER_ID: LayerId = LayerId::uninitialized();
+fn mouse_layer_id() -> LayerId {
+    // Safety: MOUSE_LAYER_ID is initialized by init_mouse_cursor_layer.
+    unsafe { MOUSE_LAYER_ID }
+}
+
 #[doc(hidden)]
 pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
     let y_diff = buf[2] as i8;
-    log::debug!("{:?}", [x_diff, y_diff]);
     let left_click = buf[0] & 0b1 != 0;
-    log::debug!("buf: {:?}, clicked: {}", buf, left_click);
+    let pos = {
+        crate::lock_layer_manager!()
+            .layer(mouse_layer_id())
+            .unwrap()
+            .window()
+            .position()
+    };
+    log::debug!("pos: {:?}", pos);
     if left_click {
-        let pos = MOUSE_CURSOR.into_vec();
-        let pos = Vector2D::new(pos.0 as usize, pos.1 as usize);
+        let pos = {
+            crate::lock_layer_manager!()
+                .layer(mouse_layer_id())
+                .unwrap()
+                .window()
+                .position()
+        };
+        let pos = Vector2D::new(pos.x, pos.y);
+        log::debug!("pos: {:?}", pos);
         if let Some(pos) = frame_buffer_position_to_board_position(pos) {
             let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
             queue.push_back(pos);
         }
     }
 
-    MOUSE_CURSOR.add(x_diff as isize, y_diff as isize);
-    if let Some(pixcel_writer) = get_pixcel_writer() {
-        let (mut x, mut y) = MOUSE_CURSOR.into_vec();
-        use core::cmp::{max, min};
-        x = min(
-            max(x, 0),
-            pixcel_writer.horizontal_resolution() as isize - 1,
+    {
+        crate::lock_layer_manager_mut!().move_relative(
+            mouse_layer_id(),
+            x_diff.into(),
+            y_diff.into(),
         );
-        y = min(max(y, 0), pixcel_writer.vertical_resolution() as isize - 1);
-        let vec = Vector2D::new(x as usize, y as usize);
-        log::debug!(
-            "rendering: {:?} in [{}, {}]",
-            vec,
-            pixcel_writer.horizontal_resolution(),
-            pixcel_writer.vertical_resolution()
-        );
-        pixcel_writer.fill_shape(vec, &MOUSE_CURSOR_SHAPE);
-    };
+    }
 }
 
 #[doc(hidden)]
@@ -63,7 +104,6 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
     buf[1..]
         .iter()
         .filter_map(|&keycode| {
-            log::debug!("keycode: {}", keycode);
             if keycode == 0 {
                 None
             } else if shifted {
@@ -73,10 +113,8 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
             }
         })
         .for_each(|c| {
-            log::debug!("char: '{}'", c);
             if c == ' ' {
                 // flip the RUNNING state
-                log::debug!("flip");
                 lifegame::RUNNING.fetch_not(core::sync::atomic::Ordering::SeqCst);
             }
             print_and_flush!("{}", c)

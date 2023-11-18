@@ -5,7 +5,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use alloc::{string::String, vec};
-use common::types::{GraphicsInfo, KernelMain, KernelMainArg, PixcelFormat};
+use common::types::{GraphicsInfo, KernelMain, KernelMainArg, MemMapEntry, PixcelFormat};
 use core::arch::asm;
 use core::panic;
 use elf::{endian::AnyEndian, ElfBytes};
@@ -200,15 +200,28 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     unsafe {
         dont_use_this_uninit_buf.set_len(buf_size)
     };
-    let (_system_table, _memory_map) =
+    let mut mem_map_buf = Vec::<u8>::with_capacity(buf_size);
+    let (_system_table, memory_map) =
         match system_table.exit_boot_services(image_handle, &mut dont_use_this_uninit_buf) {
             Ok(ret) => ret,
             Err(err) => {
                 panic!("Failed to exit_boot_services, {:?}", err);
             }
         };
+    let size = memory_map.len();
+    {
+        let header = mem_map_buf.as_mut_ptr() as *mut MemMapEntry;
+        unsafe { (*header).size = size as u64 };
+        let desc_head = unsafe { (header).add(1) } as *mut MemoryDescriptor;
+        for (i, desc) in memory_map.enumerate() {
+            unsafe { *desc_head.add(i) = *desc };
+        }
+    }
 
-    let kernel_main_arg = KernelMainArg { graphics_info };
+    let kernel_main_arg = KernelMainArg {
+        graphics_info,
+        memory_map_entry: mem_map_buf.as_ptr() as *const _,
+    };
 
     let kernel_main: KernelMain = unsafe { core::mem::transmute(entry_point as usize) };
 

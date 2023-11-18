@@ -183,7 +183,6 @@ impl EventRing<&'static GlobalAllocator> {
         };
 
         if next == segment_end {
-            log::debug!("reached segment end.");
             next = segment_begin;
             self.cycle_bit = !self.cycle_bit;
         }

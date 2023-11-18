@@ -3,10 +3,12 @@
 #![feature(allocator_api)]
 #![feature(generic_arg_infer)]
 
-pub mod alloc;
+pub mod allocator;
 pub mod futures;
+pub mod layer;
 pub mod logger;
 pub mod mutex;
+pub mod pixel;
 pub mod render;
 pub mod shapes;
 pub mod write_to;
@@ -52,10 +54,20 @@ pub trait PixcelInfo {
     fn horizontal_resolution(&self) -> usize;
     fn vertical_resolution(&self) -> usize;
     fn pixcels_per_scan_line(&self) -> usize;
+    fn frame_buffer_base(&self) -> *mut u8;
 }
 
 pub trait PixcelWritable {
     fn write(&self, x: usize, y: usize, color: Color);
+}
+
+pub trait PixcelWritableMut {
+    fn write(&mut self, x: usize, y: usize, color: Color);
+}
+impl<T: PixcelWritable> PixcelWritableMut for T {
+    fn write(&mut self, x: usize, y: usize, color: Color) {
+        PixcelWritable::write(self, x, y, color)
+    }
 }
 
 pub trait AsciiWriter: PixcelWritable + PixcelInfo + Renderer {
@@ -236,6 +248,10 @@ mod test {
         }
         fn pixcels_per_scan_line(&self) -> usize {
             self.horizontal_resolution() / 4
+        }
+
+        fn frame_buffer_base(&self) -> *mut u8 {
+            panic!("should not be called")
         }
     }
 

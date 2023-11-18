@@ -1,7 +1,10 @@
+extern crate alloc;
 use core::fmt::{self};
 
 use common::types::{GraphicsInfo, PixcelFormat};
+use kernel_lib::layer::LayerManager;
 use kernel_lib::mutex::Mutex;
+use kernel_lib::pixel::{Bgr, MarkerColor, Rgb};
 use kernel_lib::{
     logger::{CharWriter, DecoratedLog},
     AsciiWriter, Color, PixcelInfo, PixcelWritable, Writer,
@@ -9,25 +12,6 @@ use kernel_lib::{
 use once_cell::unsync::OnceCell;
 
 use crate::serial_print;
-
-#[derive(Debug, Clone, Copy)]
-pub struct Rgb;
-#[derive(Debug, Clone, Copy)]
-pub struct Bgr;
-
-pub trait MarkerColor: Copy {
-    fn pixcel_format() -> PixcelFormat;
-}
-impl MarkerColor for Rgb {
-    fn pixcel_format() -> PixcelFormat {
-        PixcelFormat::Rgb
-    }
-}
-impl MarkerColor for Bgr {
-    fn pixcel_format() -> PixcelFormat {
-        PixcelFormat::Bgr
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct PixcelWriter<T: MarkerColor> {
@@ -179,6 +163,10 @@ impl<T: MarkerColor> PixcelInfo for PixcelWriter<T> {
     fn pixcels_per_scan_line(&self) -> usize {
         self.pixcels_per_scan_line
     }
+
+    fn frame_buffer_base(&self) -> *mut u8 {
+        self.frame_buffer_base
+    }
 }
 
 impl<T: MarkerColor> PixcelWriter<T>
@@ -200,8 +188,15 @@ pub fn get_pixcel_writer() -> Option<&'static (dyn AsciiWriter + Send + Sync)> {
     Some(WRITER.lock().get()?.pixcel_writer())
 }
 
+static mut GRAPHICS_INFO: GraphicsInfo = GraphicsInfo::uninitialized();
+pub fn get_graphics_info() -> &'static GraphicsInfo {
+    unsafe { &GRAPHICS_INFO }
+}
 /// init graphics and return pixcel_writer
 pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter + Send + Sync) {
+    unsafe {
+        GRAPHICS_INFO = graphics_info;
+    }
     // clear
     for y in 0..graphics_info.vertical_resolution() {
         for x in 0..graphics_info.horizontal_resolution() {
@@ -219,6 +214,10 @@ pub fn init_graphics(graphics_info: GraphicsInfo) -> &'static (dyn AsciiWriter +
     writer.get_or_init(|| {
         let writer = Writer::new(pixcel_writer);
         writer
+    });
+    kernel_lib::lock!(LAYER_MANGER).get_or_init(|| {
+        let layer_manager = LayerManager::new(pixcel_writer);
+        layer_manager
     });
     pixcel_writer
 }
@@ -330,4 +329,31 @@ pub fn _print_and_flush(args: fmt::Arguments) {
         writer.write_fmt(args).unwrap();
         writer.flush();
     });
+}
+
+pub static LAYER_MANGER: Mutex<OnceCell<LayerManager<'static>>> = Mutex::new(OnceCell::new());
+
+#[macro_export]
+macro_rules! lock_layer_manager {
+    () => {
+        kernel_lib::lock!($crate::graphics::LAYER_MANGER)
+            .get()
+            .unwrap()
+    };
+}
+
+#[macro_export]
+macro_rules! lock_layer_manager_mut {
+    () => {
+        kernel_lib::lock!($crate::graphics::LAYER_MANGER)
+            .get_mut()
+            .unwrap()
+    };
+}
+
+#[macro_export]
+macro_rules! lock_layer_manager_raw {
+    () => {
+        kernel_lib::lock!($crate::graphics::LAYER_MANGER)
+    };
 }

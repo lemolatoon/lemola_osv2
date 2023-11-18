@@ -4,11 +4,14 @@ use core::sync::atomic::AtomicBool;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use kernel_lib::futures::yield_pending;
+use kernel_lib::layer::{Position, Window};
 use kernel_lib::mutex::Mutex;
-use kernel_lib::render::Vector2D;
+use kernel_lib::pixel::new_rendering_handler;
+use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
 
-use crate::graphics::get_pixcel_writer;
+use crate::graphics::get_graphics_info;
+use crate::lock_layer_manager_mut;
 
 pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
 
@@ -21,16 +24,13 @@ pub static RUNNING: AtomicBool = AtomicBool::new(true);
 pub fn frame_buffer_position_to_board_position(
     frame_buffer_position: Vector2D,
 ) -> Option<(usize, usize)> {
-    log::debug!("transforming...: {:?}", &frame_buffer_position);
     let x = frame_buffer_position.x as isize - BOARD_POS.x as isize;
     let y = frame_buffer_position.y as isize - BOARD_POS.y as isize;
-    log::debug!("(relative) (x, y) = {:?}", (x, y));
     if x < 0 || y < 0 {
         return None;
     }
     let x = x as usize / PIXCEL_SIZE;
     let y = y as usize / PIXCEL_SIZE;
-    log::debug!("(x, y) = {:?}", (x, y));
     if x >= SIZE || y >= SIZE {
         return None;
     }
@@ -38,7 +38,15 @@ pub fn frame_buffer_position_to_board_position(
 }
 
 pub async fn do_lifegame() {
-    let pixcel_writer = get_pixcel_writer().unwrap();
+    let window = Window::new(
+        SIZE * PIXCEL_SIZE,
+        SIZE * PIXCEL_SIZE,
+        new_rendering_handler(*get_graphics_info()),
+        None,
+        Position::new(0, 0),
+    );
+    let id = { crate::lock_layer_manager_mut!().new_layer(window) };
+    // let pixcel_writer = get_pixcel_writer().unwrap();
     let board: [[u8; SIZE]; SIZE] = [
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -74,16 +82,28 @@ pub async fn do_lifegame() {
                     board[y][x] = true;
                 }
                 if !is_empty {
-                    pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+                    crate::lock_layer_manager_mut!()
+                        .layer_mut(id)
+                        .unwrap()
+                        .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
                 }
             }
             yield_pending().await;
         }
+        {
+            crate::lock_layer_manager!().flush();
+        }
+        yield_pending().await;
         // log::info!("RUNNING: {}", RUNNING.load(core::sync::atomic::Ordering::SeqCst));
         if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
             process::<SIZE>(&mut board);
         }
-        pixcel_writer.render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+        {
+            lock_layer_manager_mut!()
+                .layer_mut(id)
+                .unwrap()
+                .render_board(&board, BOARD_POS, PIXCEL_SIZE, Color::green());
+        }
         yield_pending().await;
     }
 }

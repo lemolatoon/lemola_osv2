@@ -1,3 +1,4 @@
+extern crate alloc;
 use core::ffi::c_void;
 
 use kernel_lib::futures::yield_pending;
@@ -37,18 +38,15 @@ where
     loop {
         {
             if controller.pending_already_popped_queue() {
-                log::debug!("having pending already popped queue");
                 controller.process_once_received().await;
+                yield_pending().await;
             }
             if controller.pending_event() {
-                log::debug!("having pending event");
                 controller.process_event().await;
+                yield_pending().await;
             }
 
             controller.process_user_event().await;
-        }
-
-        for _ in 0..100 {
             yield_pending().await;
         }
     }
