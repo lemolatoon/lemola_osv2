@@ -13,8 +13,8 @@ use crate::{AsciiWriter, Color, PixcelWritableMut};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
-    x: usize,
-    y: usize,
+    pub x: usize,
+    pub y: usize,
 }
 
 impl Position {
@@ -57,9 +57,11 @@ impl Window {
         self.position = new_position;
     }
 
-    pub fn move_relative(&mut self, x_diff: usize, y_diff: usize) {
-        self.position.x += x_diff;
-        self.position.y += y_diff;
+    pub fn move_relative(&mut self, x_diff: isize, y_diff: isize) {
+        let x = self.position.x as isize + x_diff;
+        let y = self.position.y as isize + y_diff;
+        self.position.x = x.try_into().unwrap_or(0);
+        self.position.y = y.try_into().unwrap_or(0);
     }
 
     pub fn width(&self) -> usize {
@@ -68,6 +70,10 @@ impl Window {
 
     pub fn height(&self) -> usize {
         self.pixels[0].len()
+    }
+
+    pub fn position(&self) -> Position {
+        self.position
     }
 
     pub fn flush(&self, writer: &(dyn AsciiWriter + Send + Sync)) {
@@ -155,7 +161,7 @@ impl Window {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LayerId(usize);
 
 impl LayerId {
@@ -175,6 +181,10 @@ impl Layer {
         let id = LayerId(LATEST_UNUSED_ID.fetch_add(1, Ordering::Relaxed));
         assert!(id < LayerId::uninitialized());
         Self { id, window }
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.window
     }
 
     pub fn id(&self) -> LayerId {
@@ -221,7 +231,7 @@ impl<'a> LayerManager<'a> {
         layer.window.move_to(new_position);
     }
 
-    pub fn move_relative(&mut self, id: LayerId, x_diff: usize, y_diff: usize) {
+    pub fn move_relative(&mut self, id: LayerId, x_diff: isize, y_diff: isize) {
         let Some(layer) = self.layers.get_mut(&id) else {
             return;
         };

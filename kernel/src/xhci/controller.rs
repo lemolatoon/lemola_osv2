@@ -267,6 +267,7 @@ where
     }
 
     pub async fn process_event_ring_event(&self, event_trb: event::Allowed) {
+        log::debug!("event_trb: {:?}", event_trb);
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
                 self.process_transfer_event(transfer_event);

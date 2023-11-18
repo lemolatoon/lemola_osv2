@@ -42,8 +42,7 @@ pub unsafe fn init_mouse_cursor_layer() -> LayerId {
         let mut mgr = crate::lock_layer_manager_raw!();
         let mgr = mgr.get_mut().unwrap();
         let id = mgr.new_layer(window);
-        let vec = MOUSE_CURSOR.into_vec();
-        mgr.move_relative(id, vec.0 as usize, vec.1 as usize);
+        mgr.move_relative(id, 0, 0);
         let layer = mgr.layer_mut(id).unwrap();
         layer.fill_shape(Vector2D::new(0, 0), &MOUSE_CURSOR_SHAPE);
 
@@ -68,21 +67,35 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
     let y_diff = buf[2] as i8;
     let left_click = buf[0] & 0b1 != 0;
+    let pos = {
+        crate::lock_layer_manager!()
+            .layer(mouse_layer_id())
+            .unwrap()
+            .window()
+            .position()
+    };
+    log::debug!("pos: {:?}", pos);
     if left_click {
-        let pos = MOUSE_CURSOR.into_vec();
-        let pos = Vector2D::new(pos.0 as usize, pos.1 as usize);
+        let pos = {
+            crate::lock_layer_manager!()
+                .layer(mouse_layer_id())
+                .unwrap()
+                .window()
+                .position()
+        };
+        let pos = Vector2D::new(pos.x, pos.y);
+        log::debug!("pos: {:?}", pos);
         if let Some(pos) = frame_buffer_position_to_board_position(pos) {
             let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
             queue.push_back(pos);
         }
     }
 
-    MOUSE_CURSOR.add(x_diff as isize, y_diff as isize);
     {
         crate::lock_layer_manager_mut!().move_relative(
             mouse_layer_id(),
-            x_diff as usize,
-            y_diff as usize,
+            x_diff.into(),
+            y_diff.into(),
         );
     }
 }
