@@ -12,6 +12,7 @@ use crate::{
     graphics::get_graphics_info,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
+    serial::write_serial_str,
 };
 
 pub type CallbackType = fn(u8, &[u8]);
@@ -65,14 +66,6 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
     let x_diff = buf[1] as i8;
     let y_diff = buf[2] as i8;
     let left_click = buf[0] & 0b1 != 0;
-    let pos = {
-        crate::lock_layer_manager!()
-            .layer(mouse_layer_id())
-            .unwrap()
-            .window()
-            .position()
-    };
-    log::debug!("pos: {:?}", pos);
     if left_click {
         let pos = {
             crate::lock_layer_manager!()
@@ -82,7 +75,6 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
                 .position()
         };
         let pos = Vector2D::new(pos.x, pos.y);
-        log::debug!("pos: {:?}", pos);
         if let Some(pos) = frame_buffer_position_to_board_position(pos) {
             let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
             queue.push_back(pos);
@@ -115,7 +107,7 @@ pub fn _keyboard(_address: u8, buf: &[u8]) {
         .for_each(|c| {
             if c == ' ' {
                 // flip the RUNNING state
-                lifegame::RUNNING.fetch_not(core::sync::atomic::Ordering::SeqCst);
+                lifegame::RUNNING.fetch_not(core::sync::atomic::Ordering::Release);
             }
             print_and_flush!("{}", c)
         });

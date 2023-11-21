@@ -267,7 +267,7 @@ where
     }
 
     pub async fn process_event_ring_event(&self, event_trb: event::Allowed) {
-        log::debug!("event_trb: {:?}", event_trb);
+        // log::debug!("event_trb: {:?}", event_trb);
         match event_trb {
             event::Allowed::TransferEvent(transfer_event) => {
                 self.process_transfer_event(transfer_event);
@@ -1282,8 +1282,8 @@ where
             let trb_pointer: *mut TrbRaw = event.trb_pointer() as *mut TrbRaw;
             let trb = transfer::Allowed::try_from(unsafe { trb_pointer.read_volatile() }).unwrap();
 
-            if let transfer::Allowed::Normal(_normal) = trb {
-                transfer_ring.flip_cycle_bit_at(trb_pointer as u64);
+            if let transfer::Allowed::Normal(normal) = trb {
+                transfer_ring.flip_cycle_bit_at(trb_pointer as u64, normal.cycle_bit());
             }
             trb
         };

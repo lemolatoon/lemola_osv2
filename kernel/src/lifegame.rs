@@ -94,8 +94,7 @@ pub async fn do_lifegame() {
             crate::lock_layer_manager!().flush();
         }
         yield_pending().await;
-        // log::info!("RUNNING: {}", RUNNING.load(core::sync::atomic::Ordering::SeqCst));
-        if RUNNING.load(core::sync::atomic::Ordering::SeqCst) {
+        if RUNNING.load(core::sync::atomic::Ordering::Acquire) {
             process::<SIZE>(&mut board);
         }
         {
