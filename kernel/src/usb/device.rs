@@ -589,6 +589,11 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
 
         Ok(())
     }
+    pub fn push_user_event(&self, event: UserEvent) {
+        // TODO: add waker
+        let mut user_event_ring = kernel_lib::lock!(self.user_event_ring);
+        user_event_ring.push(event);
+    }
 
     async fn async_assign_address(
         &mut self,
@@ -608,10 +613,7 @@ impl<M: Mapper + Clone + Send + Sync> DeviceContextInfo<M, &'static GlobalAlloca
             parent_hub_slot_id: None,
             parent_port_index: None,
         };
-        {
-            let mut user_event_ring = kernel_lib::lock!(&self.user_event_ring);
-            user_event_ring.push(UserEvent::InitPortDevice(init_port_device))
-        }
+        self.push_user_event(UserEvent::InitPortDevice(init_port_device));
         Ok(())
     }
 

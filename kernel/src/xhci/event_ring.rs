@@ -156,6 +156,7 @@ impl EventRing<&'static GlobalAllocator> {
     }
 
     pub fn push(&mut self, trb: event::Allowed) {
+        // TODO: add waker
         self.popped.push(trb);
     }
 

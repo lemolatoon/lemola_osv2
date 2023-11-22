@@ -5,7 +5,9 @@ use x86_64::{
     structures::idt::{self, InterruptStackFrame},
 };
 
-use crate::{serial_println, xhci::write_local_apic_id};
+use crate::xhci::{get_xhc, write_local_apic_id};
+
+use self::messages::get_interruption_message_queue;
 
 static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 
@@ -16,7 +18,19 @@ pub enum InterruptVector {
 }
 
 fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_code: Option<u64>) {
-    serial_println!("xhci interrupt handler called");
+    let xhc = get_xhc();
+    let Some(Ok(trb)) =
+        x86_64::instructions::interrupts::without_interrupts(|| xhc.pop_event_ring())
+    else {
+        return;
+    };
+    if let Err(err) =
+        get_interruption_message_queue().push(messages::InterruptionMessage::Xhci(trb))
+    {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            log::warn!("An interrupt message is dropped: {:?}", err);
+        })
+    };
 
     write_local_apic_id(0xb0, 0);
 }

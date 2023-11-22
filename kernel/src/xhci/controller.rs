@@ -928,8 +928,6 @@ where
     MF: Fn(u8, &[u8]),
     KF: Fn(u8, &[u8]),
 {
-    // process events
-
     pub async fn process_user_event(&self) {
         let popped = {
             let mut user_event_ring = kernel_lib::lock!(self.user_event_ring);

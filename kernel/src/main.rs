@@ -110,7 +110,6 @@ extern "sysv64" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     // unsafe { asm!("ud2") };
 
     let mut executor = Executor::new();
-    let controller: &'static _ = unsafe { &*(&controller as *const _) };
     let polling_task = Task::new(Priority::Default, kernel::xhci::poll_forever(controller));
     let lifegame_task = Task::new(Priority::Default, kernel::lifegame::do_lifegame());
     executor.spawn(polling_task);

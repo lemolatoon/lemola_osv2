@@ -1,11 +1,16 @@
+pub mod task;
 extern crate alloc;
 use core::ffi::c_void;
 
+use conquer_once::spin::OnceCell;
 use kernel_lib::futures::yield_pending;
 
 use crate::{
-    alloc::alloc::GlobalAllocator, interrupts::InterruptVector, memory::MemoryMapper, pci,
-    serial_println, usb::class_driver::ClassDriverManager,
+    alloc::alloc::GlobalAllocator,
+    interrupts::InterruptVector,
+    memory::MemoryMapper,
+    pci, serial_println,
+    usb::class_driver::{callbacks::CallbackType, ClassDriverManager},
 };
 
 use self::controller::XhciController;
@@ -20,6 +25,12 @@ pub mod trb;
 pub mod user_event_ring;
 
 pub type Controller<MF, KF> = XhciController<MemoryMapper, &'static GlobalAllocator, MF, KF>;
+pub type Xhc = Controller<CallbackType, CallbackType>;
+
+static XHC: OnceCell<Xhc> = OnceCell::uninit();
+pub fn get_xhc() -> &'static Xhc {
+    XHC.get().expect("XHC not initialized")
+}
 
 const LOCAL_APIC_ADDRESS: usize = 0xfee0_0000;
 pub fn read_local_apic_id(offset: usize) -> u8 {
@@ -28,6 +39,30 @@ pub fn read_local_apic_id(offset: usize) -> u8 {
 
 pub fn write_local_apic_id(offset: usize, data: u32) {
     unsafe { ((LOCAL_APIC_ADDRESS + offset) as *mut u32).write_volatile(data) };
+}
+
+pub async fn process_user_event() {
+    let xhc = get_xhc();
+    loop {
+        xhc.process_user_event().await;
+        yield_pending().await;
+    }
+}
+
+pub async fn process_already_popped() {
+    let xhc = get_xhc();
+    loop {
+        xhc.process_once_received().await;
+        yield_pending().await;
+    }
+}
+
+pub async fn process_event() {
+    let xhc = get_xhc();
+    loop {
+        xhc.process_event().await;
+        yield_pending().await;
+    }
 }
 
 pub async fn poll_forever<MF, KF>(controller: &Controller<MF, KF>)
@@ -92,13 +127,9 @@ where
     }
 }
 
-pub fn init_xhci_controller<MF, KF>(
-    class_driver_manager: &'static ClassDriverManager<MF, KF>,
-) -> Controller<MF, KF>
-where
-    MF: Fn(u8, &[u8]) + 'static,
-    KF: Fn(u8, &[u8]) + 'static,
-{
+pub fn init_xhci_controller(
+    class_driver_manager: &'static ClassDriverManager<CallbackType, CallbackType>,
+) -> &'static Xhc {
     let devices = crate::pci::register::scan_all_bus();
     for device in &devices {
         serial_println!(
@@ -170,7 +201,8 @@ where
     }
     log::debug!("Configured ports");
 
-    controller
+    XHC.init_once(|| controller);
+    get_xhc()
 }
 
 pub fn next_route(routing: u32, port: u8) -> u32 {
