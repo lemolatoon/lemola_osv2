@@ -10,7 +10,10 @@ use kernel_lib::{
 
 use crate::{
     graphics::get_graphics_info,
-    lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
+    lifegame::{
+        self, frame_buffer_position_to_board_position, get_clicked_position_queue,
+        init_clicked_position_queue,
+    },
     print_and_flush,
 };
 
@@ -47,6 +50,8 @@ pub unsafe fn init_mouse_cursor_layer() -> LayerId {
         id
     };
 
+    init_clicked_position_queue();
+
     // Safety: This function assumed to be called before any other functions that use MOUSE_LAYER_ID.
     unsafe {
         MOUSE_LAYER_ID = id;
@@ -75,8 +80,8 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
         };
         let pos = Vector2D::new(pos.x, pos.y);
         if let Some(pos) = frame_buffer_position_to_board_position(pos) {
-            let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
-            queue.push_back(pos);
+            let queue = get_clicked_position_queue();
+            queue.force_push(pos);
         }
     }
 

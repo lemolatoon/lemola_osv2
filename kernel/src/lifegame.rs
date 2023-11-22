@@ -1,11 +1,11 @@
 extern crate alloc;
 use core::sync::atomic::AtomicBool;
 
-use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use conquer_once::spin::OnceCell;
+use crossbeam_queue::ArrayQueue;
 use kernel_lib::futures::yield_pending;
 use kernel_lib::layer::{Position, Window};
-use kernel_lib::mutex::Mutex;
 use kernel_lib::pixel::new_rendering_handler;
 use kernel_lib::render::{RendererMut, Vector2D};
 use kernel_lib::Color;
@@ -13,7 +13,19 @@ use kernel_lib::Color;
 use crate::graphics::get_graphics_info;
 use crate::lock_layer_manager_mut;
 
-pub static CLICKED_POSITION_QUEUE: Mutex<VecDeque<(usize, usize)>> = Mutex::new(VecDeque::new());
+pub static CLICKED_POSITION_QUEUE: OnceCell<ArrayQueue<(usize, usize)>> = OnceCell::uninit();
+
+pub fn init_clicked_position_queue() {
+    CLICKED_POSITION_QUEUE
+        .try_init_once(|| ArrayQueue::new(10))
+        .expect("CLICKED_POSITION_QUEUE already initialized");
+}
+
+pub fn get_clicked_position_queue() -> &'static ArrayQueue<(usize, usize)> {
+    CLICKED_POSITION_QUEUE
+        .get()
+        .expect("CLICKED_POSITION_QUEUE not initialized")
+}
 
 const SIZE: usize = 20;
 const PIXCEL_SIZE: usize = 30;
@@ -76,10 +88,11 @@ pub async fn do_lifegame() {
     loop {
         for _ in 0..2000000 {
             {
-                let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
+                let queue = get_clicked_position_queue();
                 let is_empty = queue.is_empty();
-                while let Some((x, y)) = queue.pop_front() {
+                while let Some((x, y)) = queue.pop() {
                     board[y][x] = true;
+                    // board[y][x] = !board[y][x]; だと、なぜか途中でマウスがとまる
                 }
                 if !is_empty {
                     crate::lock_layer_manager_mut!()
