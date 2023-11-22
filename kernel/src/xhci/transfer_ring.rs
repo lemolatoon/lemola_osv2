@@ -70,14 +70,15 @@ impl TransferRing<&'static GlobalAllocator> {
         }
     }
 
-    pub fn flip_cycle_bit_at(&mut self, trb_pointer: u64) {
+    pub fn flip_cycle_bit_at(&mut self, trb_pointer: u64, prev_cycle_bit: bool) {
         let write_index = self
             .buffer_range()
             .position(|i| i == trb_pointer as usize)
             .unwrap()
             / core::mem::size_of::<TrbRaw>();
-        assert_ne!(write_index, self.trb_buffer.len() - 1);
+        debug_assert_ne!(write_index, self.trb_buffer.len() - 1);
         self.write_index = write_index;
+        debug_assert_eq!(self.trb_buffer[write_index].cycle_bit(), prev_cycle_bit);
         self.trb_buffer[write_index].toggle_cycle_bit();
 
         self.write_index += 1;

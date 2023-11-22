@@ -104,11 +104,10 @@ extern "sysv64" fn kernel_main2(arg: *const KernelMainArg) -> ! {
 
     static_assertions::assert_impl_all!(DeviceContextInfo<MemoryMapper, &'static GlobalAllocator>: usb_host::USBHost);
 
+    // x86_64::instructions::interrupts::enable();
     x86_64::instructions::interrupts::int3();
     // FIXME: this comment outted code causes infinite exception loop
     // unsafe { asm!("ud2") };
-
-    // x86_64::instructions::interrupts::enable();
 
     let mut executor = Executor::new();
     let controller: &'static _ = unsafe { &*(&controller as *const _) };
@@ -117,7 +116,6 @@ extern "sysv64" fn kernel_main2(arg: *const KernelMainArg) -> ! {
     executor.spawn(polling_task);
     executor.spawn(lifegame_task);
 
-    // x86_64::instructions::interrupts::enable();
     executor.run();
 }
 

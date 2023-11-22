@@ -3,7 +3,7 @@ use x86_64::{
     structures::idt::{self, InterruptStackFrame},
 };
 
-use crate::xhci::write_local_apic_id;
+use crate::{serial_println, xhci::write_local_apic_id};
 
 static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 
@@ -14,18 +14,7 @@ pub enum InterruptVector {
 }
 
 fn xhci_interrupt_handler(_stack_frame: InterruptStackFrame, _index: u8, _error_code: Option<u64>) {
-    // x86_64::instructions::interrupts::without_interrupts(|| {
-    //     log::info!("xhci interrupt handler called");
-    //     log::info!("can lock xhc: {}", XHC.try_lock().is_some());
-    //     let mut xhc = XHC.lock();
-    //     if let Some(xhc) = xhc.get_mut() {
-    //         while xhc.pending_event() {
-    //             // TODO: push this task to task queue
-    //             await_sync!(xhc.process_event());
-    //         }
-    //     }
-    //     log::info!("end xhci interrupt handler called");
-    // });
+    serial_println!("xhci interrupt handler called");
 
     write_local_apic_id(0xb0, 0);
 }
