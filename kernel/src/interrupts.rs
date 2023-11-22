@@ -1,3 +1,5 @@
+pub mod messages;
+
 use x86_64::{
     set_general_handler,
     structures::idt::{self, InterruptStackFrame},
