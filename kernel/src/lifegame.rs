@@ -74,7 +74,7 @@ pub async fn do_lifegame() {
         .map(|inner| inner.into_iter().map(|n| n == 1).collect())
         .collect();
     loop {
-        for _ in 0..100000 {
+        for _ in 0..2000000 {
             {
                 let mut queue = kernel_lib::lock!(CLICKED_POSITION_QUEUE);
                 let is_empty = queue.is_empty();

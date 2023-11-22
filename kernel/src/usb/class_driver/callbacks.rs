@@ -81,11 +81,11 @@ pub fn _mouse(_address: u8, buf: &[u8]) {
     }
 
     {
-        crate::lock_layer_manager_mut!().move_relative(
-            mouse_layer_id(),
-            x_diff.into(),
-            y_diff.into(),
-        );
+        let mut mgr = crate::lock_layer_manager_raw!();
+        mgr.get_mut()
+            .unwrap()
+            .move_relative(mouse_layer_id(), x_diff.into(), y_diff.into());
+        mgr.get_mut().unwrap().flush();
     }
 }
 

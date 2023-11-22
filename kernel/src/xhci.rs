@@ -75,17 +75,11 @@ where
             if controller.pending_already_popped_queue() {
                 controller.process_once_received().await;
                 yield_pending().await;
-                {
-                    crate::lock_layer_manager!().flush();
-                }
                 yield_pending().await;
             }
             if controller.pending_event() {
                 controller.process_event().await;
                 yield_pending().await;
-                {
-                    crate::lock_layer_manager!().flush();
-                }
                 yield_pending().await;
             }
 
