@@ -12,7 +12,6 @@ use crate::{
     graphics::get_graphics_info,
     lifegame::{self, frame_buffer_position_to_board_position, CLICKED_POSITION_QUEUE},
     print_and_flush,
-    serial::write_serial_str,
 };
 
 pub type CallbackType = fn(u8, &[u8]);
