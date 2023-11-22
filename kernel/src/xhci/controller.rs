@@ -236,7 +236,7 @@ where
         }
     }
 
-    pub async fn process_event(&self) {
+    pub fn pop_event_ring(&self) -> Option<Result<event::Allowed, TrbRaw>> {
         let mut registers = kernel_lib::lock!(self.registers);
         let primary_interrupter = &mut registers.interrupter_register_set.interrupter_mut(0);
         let event_ring_trb = unsafe {
@@ -249,12 +249,16 @@ where
         let mut event_ring = kernel_lib::lock!(self.event_ring);
         if event_ring_trb.cycle_bit() != event_ring.cycle_bit() {
             // EventRing does not have front
-            return;
+            return None;
         }
         let primary_interrupter = primary_interrupter;
-        let popped = event_ring.pop(primary_interrupter);
-        drop(registers);
-        drop(event_ring);
+        Some(event_ring.pop(primary_interrupter))
+    }
+
+    pub async fn process_event(&self) {
+        let Some(popped) = self.pop_event_ring() else {
+            return;
+        };
         let _trb = match popped {
             Ok(event_trb) => {
                 self.process_event_ring_event(event_trb).await;
